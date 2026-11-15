@@ -183,7 +183,10 @@ public final class LocalAssetServer {
     private WebResourceResponse maybeInterceptProtectedFsList(Context context, Uri uri) {
         try {
             String defaultLoc = context.getFilesDir().getAbsolutePath();
-            String locDir = uri.getQueryParameter("directory");
+            String locDir = uri.getQueryParameter("location[directory]");
+            if (locDir == null || locDir.trim().isEmpty()) {
+                locDir = uri.getQueryParameter("directory");
+            }
             if (locDir == null || locDir.trim().isEmpty()) {
                 locDir = defaultLoc;
             }

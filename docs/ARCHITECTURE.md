@@ -1,4 +1,4 @@
-# OpenCode for Android — Architecture Specification (`v2.3.0-r3`)
+# OpenCode for Android — Architecture Specification (`v2.3.0-r4`)
 
 ## 1. Execution Model: Pure Bionic (`Zero PRoot`, `Zero Glibc`)
 

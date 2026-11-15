@@ -1,9 +1,7 @@
 package com.oc.ide.ui.webview;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Build;
-import android.util.Base64;
 import android.util.Log;
 import android.webkit.CookieManager;
 import android.webkit.WebView;
@@ -15,7 +13,6 @@ import com.oc.ide.theme.ThemeColors;
 import com.oc.ide.theme.ThemeManager;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Injects the pre-minted OpenCode session cookie into WebView's CookieManager
@@ -67,22 +64,16 @@ public final class AppLoader {
 
         LocalAssetServer.setHostThemeHint(hostTheme);
         bridge.setCoreOriginActive(true);
-        String startUrl = "http://127.0.0.1:" + port + "/";
         try {
-            SharedPreferences prefs = context.getSharedPreferences("oc_workspace_boot", Context.MODE_PRIVATE);
-            if (!prefs.getBoolean("opened_default_ws_v2", false)) {
-                File defaultWs = new RuntimePaths(context).getDefaultWorkspaceDir();
-                if (defaultWs != null && (defaultWs.isDirectory() || defaultWs.mkdirs())) {
-                    String encodedDir = Base64.encodeToString(
-                            defaultWs.getAbsolutePath().getBytes(StandardCharsets.UTF_8),
-                            Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
-                    startUrl = "http://127.0.0.1:" + port + "/" + encodedDir + "/session";
-                    prefs.edit().putBoolean("opened_default_ws_v2", true).apply();
-                }
+            File defaultWs = new RuntimePaths(context).getDefaultWorkspaceDir();
+            if (defaultWs != null && !defaultWs.isDirectory()) {
+                // Ensure default /storage/emulated/0/Documents/OpenCode folder exists on disk
+                // eslint-disable-next-line
+                defaultWs.mkdirs();
             }
         } catch (Exception e) {
-            Log.w(TAG, "workspace startUrl fallback: " + e.getMessage());
+            Log.w(TAG, "default workspace mkdirs warning: " + e.getMessage());
         }
-        webView.loadUrl(startUrl);
+        webView.loadUrl("http://127.0.0.1:" + port + "/");
     }
 }

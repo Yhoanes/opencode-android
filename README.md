@@ -9,7 +9,7 @@
   <p><font color="#7d8590">Standalone <b>OpenCode v2.3.0</b> autonomous coding IDE &amp; native <b>Pure Android Bionic ARM64</b> APK — engineered by <a href="https://github.com/Yhoanes"><b>Yhoanes</b></a> (zero PRoot, zero Glibc shim, zero Termux dependency).</font></p>
 
   <p>
-    <code>v2.3.0-r3</code> &nbsp;&bull;&nbsp;
+    <code>v2.3.0-r4</code> &nbsp;&bull;&nbsp;
     <code>Android 9.0+ (API 28+)</code> &nbsp;&bull;&nbsp;
     <code>Pure Bionic /system/bin/linker64</code> &nbsp;&bull;&nbsp;
     <code>Native Rust opencode-pty v8 + oc-box</code> &nbsp;&bull;&nbsp;
@@ -30,7 +30,7 @@
 
 ## Architectural Overview
 
-**OpenCode for Android (`v2.3.0-r3`)** brings the full **OpenCode v2** autonomous software engineering engine and responsive Workbench UI directly to Android phones and tablets as a standalone native APK (`com.oc.ide`).
+**OpenCode for Android (`v2.3.0-r4`)** brings the full **OpenCode v2** autonomous software engineering engine and responsive Workbench UI directly to Android phones and tablets as a standalone native APK (`com.oc.ide`).
 
 Unlike containerized `proot-distro` wrappers, remote SSH clients, or heavy `glibc` compatibility layers, **OpenCode for Android** executes **100% Pure Android Bionic** (`ELF 64-bit LSB pie executable, ARM aarch64`, dynamically linked directly against `/system/bin/linker64`, `libc.so`, `libm.so`, and `libdl.so`). Every agent tool execution, `ripgrep` code search, interactive terminal session, `pkg` package installation, and native Rust MCP server runs directly on mobile silicon at physical UFS storage speeds.
 
@@ -125,14 +125,14 @@ Full parity with OpenCode v2's settings architecture — **Providers**, **Models
 ## Installation & Building From Source
 
 ### Option A — Install Prebuilt Signed APK
-1. Download the latest `OpenCode-v2.3.0-r3.apk` from [**GitHub Releases**](https://github.com/Yhoanes/opencode-android/releases).
+1. Download the latest `OpenCode-v2.3.0-r4.apk` from [**GitHub Releases**](https://github.com/Yhoanes/opencode-android/releases).
 2. Install directly on your Android device (or via `adb` / `rish`):
    ```bash
    # Via ADB from PC:
-   adb install -r OpenCode-v2.3.0-r3.apk
+   adb install -r OpenCode-v2.3.0-r4.apk
 
    # Or on-device via Shizuku:
-   rish -c "pm install -r /sdcard/Download/OpenCode-v2.3.0-r3.apk"
+   rish -c "pm install -r /sdcard/Download/OpenCode-v2.3.0-r4.apk"
    ```
 
 ### Option B — Gradle-Free Deterministic Build Pipeline
@@ -142,10 +142,10 @@ Full parity with OpenCode v2's settings architecture — **Providers**, **Models
 git clone https://github.com/Yhoanes/opencode-android.git
 cd opencode-android
 
-# Standard Release APK -> dist/OpenCode-v2.3.0-r3.apk (package: com.oc.ide, port: 45167)
+# Standard Release APK -> dist/OpenCode-v2.3.0-r4.apk (package: com.oc.ide, port: 45167)
 bash build.sh
 
-# Side-by-Side Dev APK -> dist/OpenCode-Dev-v2.3.0-r3.apk (package: com.oc.dev, port: 45168)
+# Side-by-Side Dev APK -> dist/OpenCode-Dev-v2.3.0-r4.apk (package: com.oc.dev, port: 45168)
 bash build.sh --dev
 ```
 

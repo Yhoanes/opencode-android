@@ -61,54 +61,66 @@
     }
   }
 
-  // 1. One-time initial default workspace seed (/storage/emulated/0/Documents/OpenCode)
-  //    Persisted in localStorage so explicit navigation to $HOME later is respected (OC-05).
-  function ensureDefaultWorkspaceRoute() {
-    if (!host || typeof host.getConfigAuth !== "function" || !bridgeToken) return false;
+  // 1. OpenCode v2.3+ route guard & one-time default workspace registration (/storage/emulated/0/Documents/OpenCode)
+  var origReplaceState = history.replaceState;
+  var origPushState = history.pushState;
+
+  function isRecognizedOpenCodeV2Route(pathname) {
+    var segs = String(pathname || "/").split("/").filter(Boolean);
+    if (segs.length === 0) return true;
+    var first = segs[0];
+    if (first === "settings" || first === "connect" || first === "components" || first === "new-session") {
+      return true;
+    }
+    if (first === "server" && segs.length >= 4 && segs[2] === "session") {
+      return true;
+    }
+    return false;
+  }
+
+  function normalizeInvalidRouteBeforeMount() {
     try {
-      if (localStorage.getItem("__oc_default_ws_seeded_v2") === "1") {
-        return false;
+      var curPath = window.location.pathname || "/";
+      if (!isRecognizedOpenCodeV2Route(curPath)) {
+        origReplaceState.call(history, null, "", "/");
+      }
+    } catch (e) {}
+  }
+
+  function seedDefaultWorkspaceOnce() {
+    if (!host || typeof host.getConfigAuth !== "function" || !bridgeToken) return;
+    try {
+      if (localStorage.getItem("__oc_default_ws_seeded_v3") === "1") {
+        return;
       }
       var cfg = JSON.parse(host.getConfigAuth(bridgeToken) || "{}");
       var filesDir = cfg.home || "/data/user/0/com.oc.ide/files";
       var workspaceDir = cfg.workspaceDir || "/storage/emulated/0/Documents/OpenCode";
-      if (!workspaceDir || workspaceDir === filesDir) return false;
-
-      var filesSlug = encodeBase64Url(filesDir);
-      var wsSlug = encodeBase64Url(workspaceDir);
-      var path = window.location.pathname || "/";
-
-      if (path === "/" + filesSlug || path.indexOf("/" + filesSlug + "/") === 0) {
-        localStorage.setItem("__oc_default_ws_seeded_v2", "1");
-        window.location.replace("/" + wsSlug + "/session");
-        return true;
-      }
+      if (!workspaceDir || workspaceDir === filesDir) return;
+      localStorage.setItem("__oc_default_ws_seeded_v3", "1");
+      fetch("/api/location?location%5Bdirectory%5D=" + encodeURIComponent(workspaceDir), {
+        credentials: "include"
+      }).catch(function () {});
     } catch (e) {}
-    return false;
   }
 
-  var origReplaceState = history.replaceState;
-  var origPushState = history.pushState;
   history.replaceState = function () {
     var r = origReplaceState.apply(this, arguments);
-    ensureDefaultWorkspaceRoute();
     scheduleNativeUiSync();
     return r;
   };
   history.pushState = function () {
     var r = origPushState.apply(this, arguments);
-    ensureDefaultWorkspaceRoute();
     scheduleNativeUiSync();
     return r;
   };
   window.addEventListener("popstate", function () {
-    ensureDefaultWorkspaceRoute();
+    normalizeInvalidRouteBeforeMount();
     scheduleNativeUiSync();
   });
 
-  if (ensureDefaultWorkspaceRoute()) {
-    return;
-  }
+  normalizeInvalidRouteBeforeMount();
+  seedDefaultWorkspaceOnce();
 
   // 2. Seed initial host theme before SolidJS mounts if user hasn't explicitly chosen one
   try {
@@ -820,11 +832,13 @@
     var inp = picker.querySelector("input.directory-picker-input") || picker.querySelector('input[role="combobox"]');
     if (!inp) return false;
     try {
+      // Trailing slash guarantees Ye(e) === -1 in OpenCode v2.3.0's combobox so Enter triggers choose.directory directly
+      var normalized = targetPath === "/" ? "/" : targetPath.replace(/\/+$/, "") + "/";
       var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
       if (setter && setter.set) {
-        setter.set.call(inp, targetPath);
+        setter.set.call(inp, normalized);
       } else {
-        inp.value = targetPath;
+        inp.value = normalized;
       }
       inp.dispatchEvent(new Event("input", { bubbles: true }));
       inp.dispatchEvent(
@@ -843,27 +857,43 @@
     }
   }
 
-  function confirmPickedDirectoryInDialog(chosenPath) {
-    if (!chosenPath || chosenPath.charAt(0) !== "/") return;
-    // Close any open DirectoryPickerDialog cleanly so we never race against a stale selection state
-    try {
-      var picker = document.querySelector(".directory-picker");
-      if (picker) {
-        var closeBtn = picker.querySelector('[data-slot="dialog-close-button"]');
-        if (closeBtn) {
-          closeBtn.click();
-        } else {
-          picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-        }
-      }
-    } catch (e) {}
-
-    var destUrl = "/" + encodeBase64Url(chosenPath) + "/session";
-    fetch("/api/project?directory=" + encodeURIComponent(chosenPath), { credentials: "include" })
+  function registerProjectAndGoHome(chosenPath) {
+    fetch("/api/location?location%5Bdirectory%5D=" + encodeURIComponent(chosenPath), {
+      credentials: "include"
+    })
       .catch(function () {})
       .then(function () {
-        window.location.assign(destUrl);
+        window.location.assign("/");
       });
+  }
+
+  function confirmPickedDirectoryInDialog(chosenPath) {
+    if (!chosenPath || chosenPath.charAt(0) !== "/") return;
+    var picker = document.querySelector(".directory-picker");
+    if (!picker || !navigateDirectoryPickerTo(picker, chosenPath)) {
+      registerProjectAndGoHome(chosenPath);
+      return;
+    }
+
+    var frames = 0;
+    function pollConfirmButton() {
+      frames++;
+      var curPicker = document.querySelector(".directory-picker");
+      if (!curPicker) return;
+      var submitBtn = curPicker.querySelector('button[data-variant="contrast"]');
+      if (submitBtn && !submitBtn.disabled) {
+        submitBtn.click();
+        return;
+      }
+      if (frames < 20) {
+        requestAnimationFrame(pollConfirmButton);
+      } else {
+        var closeBtn = curPicker.querySelector('[data-slot="dialog-close-button"]');
+        if (closeBtn) closeBtn.click();
+        registerProjectAndGoHome(chosenPath);
+      }
+    }
+    requestAnimationFrame(pollConfirmButton);
   }
 
   function mountDirectoryPickerAndroidActions() {
