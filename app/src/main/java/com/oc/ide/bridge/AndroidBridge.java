@@ -1,0 +1,271 @@
+package com.oc.ide.bridge;
+
+import android.content.Context;
+import android.webkit.JavascriptInterface;
+
+import com.oc.ide.oauth.OAuthManager;
+import com.oc.ide.runtime.RuntimeConfig;
+import com.oc.ide.runtime.RuntimeManager;
+import com.oc.ide.shell.ShizukuBridge;
+import com.oc.ide.theme.ThemeManager;
+import com.oc.ide.ui.MainActivity;
+import com.oc.ide.ui.download.FileDownloader;
+import com.oc.ide.update.AppUpdateManager;
+
+/**
+ * The single JS bridge exposed to the WebView as `window.Android` (and `window.AndroidBridge`).
+ * All methods are fail-soft and return JSON or primitives.
+ */
+public final class AndroidBridge {
+
+    private final Context appContext;
+    private final UiBridge ui = new UiBridge();
+    private final ThemeBridge themeBridge;
+    private final EngineBridge engine;
+    private final EngineConfigJson config;
+    private final ExternalUrlBridge external;
+    private final ShellBridge shell;
+    private final NotificationBridge notification;
+
+    public AndroidBridge(Context context, RuntimeManager runtime,
+                         ShizukuBridge shizuku, OAuthManager oauth,
+                         ThemeManager theme) {
+        Context appContext = context.getApplicationContext();
+        this.appContext = appContext;
+        this.themeBridge = new ThemeBridge(theme);
+        this.engine = new EngineBridge(runtime);
+        this.config = new EngineConfigJson(appContext, runtime, engine, shizuku, themeBridge);
+        this.external = new ExternalUrlBridge(appContext, oauth);
+        this.shell = new ShellBridge(shizuku);
+        this.notification = new NotificationBridge(appContext, shizuku);
+    }
+
+    public void setActivity(MainActivity activity) {
+        ui.setActivity(activity);
+    }
+
+    @JavascriptInterface
+    public void onUiReady() {
+        ui.onUiReady();
+    }
+
+    @JavascriptInterface
+    public void onUiError(final String errorMessage) {
+        ui.onUiError(errorMessage);
+    }
+
+    @JavascriptInterface
+    public boolean setTheme(String mode) {
+        return themeBridge.setTheme(mode);
+    }
+
+    @JavascriptInterface
+    public boolean setThemeByUser(final String mode) {
+        return themeBridge.setThemeByUser(mode);
+    }
+
+    @JavascriptInterface
+    public void onVisualThemeChanged(String visual) {
+        themeBridge.onVisualThemeChanged(visual);
+    }
+
+    @JavascriptInterface
+    public String getTheme() {
+        return themeBridge.getTheme();
+    }
+
+    @JavascriptInterface
+    public boolean isDesktopMode() {
+        return ui.isDesktopMode();
+    }
+
+    @JavascriptInterface
+    public void setDesktopMode(boolean enabled) {
+        ui.setDesktopMode(enabled);
+    }
+
+    @JavascriptInterface
+    public boolean isEngineReady() {
+        return engine.isReady();
+    }
+
+    @JavascriptInterface
+    public int getEnginePort() {
+        return engine.getPort();
+    }
+
+    @JavascriptInterface
+    public String getEngineBaseUrl() {
+        return engine.getBaseUrl();
+    }
+
+    @JavascriptInterface
+    public String getCsrfToken() {
+        return engine.getCsrfToken();
+    }
+
+    @JavascriptInterface
+    public String getConfig() {
+        return config.get();
+    }
+
+    @JavascriptInterface
+    public void openUrl(String url) {
+        external.open(url);
+    }
+
+    @JavascriptInterface
+    public String exec(String cmd) {
+        return shell.exec(cmd);
+    }
+
+    @JavascriptInterface
+    public String shizuku(String cmd) {
+        return shell.exec(cmd);
+    }
+
+    @JavascriptInterface
+    public boolean shizukuAvailable() {
+        return shell.available();
+    }
+
+    @JavascriptInterface
+    public boolean postNotification(String title, String message, String tag) {
+        return notification.post(title, message, tag);
+    }
+
+    @JavascriptInterface
+    public String listNotifications() {
+        return notification.list();
+    }
+
+    @JavascriptInterface
+    public void saveBlob(String base64Data, String filename, String mimeType) {
+        if (MainActivity.activeActivity != null) {
+            FileDownloader.handleBlobData(
+                    MainActivity.activeActivity, base64Data, filename, mimeType);
+        }
+    }
+
+    @JavascriptInterface
+    public String getPluginsCatalogJson() {
+        return engine.getPluginsCatalogJson();
+    }
+
+    @JavascriptInterface
+    public String listAndroidPlugins() {
+        return engine.listAndroidPlugins();
+    }
+
+    @JavascriptInterface
+    public String installMarketplacePlugin(String pluginName, String archiveUrl,
+                                           String catalogId, String marketplace, String version) {
+        return engine.installMarketplacePlugin(pluginName, archiveUrl, catalogId, marketplace, version);
+    }
+
+    @JavascriptInterface
+    public String toggleAndroidPlugin(String pluginName, boolean enabled) {
+        return engine.toggleAndroidPlugin(pluginName, enabled);
+    }
+
+    @JavascriptInterface
+    public String postProcessInstalledPlugin(String pluginName) {
+        return engine.postProcessInstalledPlugin(pluginName);
+    }
+
+    @JavascriptInterface
+    public boolean uninstallMarketplacePlugin(String pluginName) {
+        return engine.uninstallMarketplacePlugin(pluginName);
+    }
+
+    @JavascriptInterface
+    public String reloadEngineConfig() {
+        return engine.reloadEngineConfig();
+    }
+
+    @JavascriptInterface
+    public boolean restartEngine() {
+        return engine.restartEngine();
+    }
+
+    @JavascriptInterface
+    public String getEngineLogs(int maxLines) {
+        return engine.getEngineLogs(maxLines);
+    }
+
+    @JavascriptInterface
+    public String getMicAccessStatus() {
+        try {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) {
+                return "granted";
+            }
+            MainActivity act = MainActivity.activeActivity;
+            Context ctx = act != null ? act : appContext;
+            if (ctx != null && ctx.checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                    == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                return "granted";
+            }
+            return "not-determined";
+        } catch (Throwable t) {
+            return "granted";
+        }
+    }
+
+    @JavascriptInterface
+    public void requestMicAccess(final String callbackId) {
+        MainActivity act = MainActivity.activeActivity;
+        if (act != null) {
+            act.requestMicAccessFromJs(callbackId);
+        }
+    }
+
+    @JavascriptInterface
+    public void openAppSettings() {
+        try {
+            MainActivity act = MainActivity.activeActivity;
+            Context ctx = act != null ? act : appContext;
+            if (ctx != null) {
+                android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
+                intent.setData(android.net.Uri.parse("package:" + ctx.getPackageName()));
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                ctx.startActivity(intent);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @JavascriptInterface
+    public String getAppVersion() {
+        try {
+            return AppUpdateManager.getInstance(appContext).getInstalledVersion();
+        } catch (Throwable t) {
+            return RuntimeConfig.CORE_VERSION;
+        }
+    }
+
+    @JavascriptInterface
+    public String getUpdateStateJson() {
+        try {
+            return AppUpdateManager.getInstance(appContext).getStateJson();
+        } catch (Throwable t) {
+            return "{\"type\":\"idle\"}";
+        }
+    }
+
+    @JavascriptInterface
+    public void checkForAppUpdates(boolean manual) {
+        try {
+            AppUpdateManager.getInstance(appContext).checkForUpdates(manual);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @JavascriptInterface
+    public void applyAppUpdate() {
+        try {
+            AppUpdateManager.getInstance(appContext).applyUpdate();
+        } catch (Throwable ignored) {
+        }
+    }
+}

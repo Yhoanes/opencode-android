@@ -1,0 +1,43 @@
+OpenCode for Android (v2.3.0-r1)
+Copyright (c) 2026 Yhoanes (https://github.com/Yhoanes/opencode-android)
+
+========================================================================
+ATTRIBUTION & NON-COMMERCIAL NOTICE (Apache License 2.0, Section 4(d))
+========================================================================
+
+This product and software distribution ("OpenCode for Android") was created,
+engineered, and maintained by Yhoanes:
+  https://github.com/Yhoanes/opencode-android
+
+Pursuant to Section 4(d) of the Apache License, Version 2.0, any reproduction,
+fork, redistribution, modified build, or derivative work of this repository or
+its compiled APK binaries MUST retain this NOTICE file intact and provide
+clear, prominent attribution to Yhoanes, including a direct link to the
+official repository:
+  https://github.com/Yhoanes/opencode-android
+
+Original Engineering & Architecture by Yhoanes (2026):
+  - Pure Android Bionic ARM64 host architecture (com.oc.ide / com.oc.dev,
+    10-byte prefix parity, zero PRoot, zero glibc shim, /system/bin/linker64)
+    with ForegroundService process supervision and WakeLock management.
+  - Zero-friction local authentication handshake (OnboardingSeeder
+    service-stable.json + /api/pair -> /auth/connect/:code -> WebView
+    CookieManager session injection) and Workbox ServiceWorker cache guard.
+  - Native Extensions -> Plugins catalog & instant hot-reload integration
+    (POST /api/location/reload, opencode.json MCP & skills.paths sync) for
+    10 native ARM64 MCP suites (Craft Anything + Ghidra 12.1.4, AGY Video Gen,
+    AGY Video Studio, Game Studio 2D/3D, Unity Studio Android, GitHub MCP,
+    AGY ADB Bridge, Chrome DevTools MCP, Android CLI, and Science Suite).
+  - Native ARM64 Rust multicall runtime (oc-box v0.3.0: 4-thread parallel pkg
+    manager, inotify oc-daemon scheduler, SIMD oc-fix-paths rewriter, and
+    native oc-notify Android tray IPC) plus 16 KB-aligned libagy-go-dns.so.
+  - Gradle-free 11-phase deterministic Android APK build pipeline (aapt,
+    javac, D8, zipalign, apksigner), Shizuku (rish) elevated shell integration,
+    and in-app GitHub Releases OTA updater.
+
+All source code, architecture, documentation, visual assets, and compiled APK
+distributions authored by Yhoanes are licensed strictly under the
+Non-Commercial & Mandatory Attribution terms set forth in the LICENSE file.
+Commercial sale, paid redistribution, commercial bundling, or removal of
+author attribution is strictly prohibited without prior written permission
+from Yhoanes.
