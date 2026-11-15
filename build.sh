@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build.sh - OpenCode for Android (v2.3.0-r1) Pure Bionic APK build orchestrator.
+# build.sh - OpenCode for Android (v2.3.0-r2) Pure Bionic APK build orchestrator.
 #
 # Pipeline:
 #   00-dev          -> generate BuildConfig.java + res/values/gen.xml + manifest version sync

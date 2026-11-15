@@ -2,6 +2,7 @@ package com.oc.ide.ui.webview;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Environment;
 import android.util.Log;
 import android.webkit.WebResourceResponse;
 
@@ -11,6 +12,9 @@ import com.oc.ide.util.IoUtil;
 import com.oc.ide.util.LoopbackHost;
 import com.oc.ide.util.MimeTypes;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.BufferedInputStream;
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -19,18 +23,23 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
- * Hybrid loopback asset & HTML boot injector for OpenCode v2:
- *  1. Serves Android helper assets (`/__oc_android_boot.js`, `/__oc_plugins_catalog.json`)
+ * Hybrid loopback asset & API resilience layer for OpenCode v2 on Android:
+ *  1. Neutralizes Workbox PWA ServiceWorker so fresh native boot scripts always run.
+ *  2. Serves Android helper assets (`/__oc_android_boot.js`, `/__oc_plugins_catalog.json`)
  *     directly from `filesDir/web/`.
- *  2. Intercepts main-frame HTML navigation (`GET /` or SPA routes) to inject
- *     `<script src="/__oc_android_boot.js"></script>` and strip the strict CSP header
- *     that would otherwise block mobile bridge enhancements.
- *  3. Passes all `/_assets/*`, `/api/*`, `/event`, `/pty`, `/auth/*` straight through
- *     to OpenCode's native Bun server at full native speed.
+ *  3. Synthesizes virtual directory listings on `GET /api/fs/list` ONLY for Android SELinux
+ *     unreadable container paths (`/`, `/storage`, `/storage/emulated`, `/data`, `/data/user`,
+ *     `/data/user/0`) so OpenCode's DirectoryPickerDialog never triggers HTTP 500 EACCES when
+ *     navigating to `/storage/emulated/0` or `$HOME`.
+ *  4. Reports accurate `persistentPty: false` on `GET /api/info` when `opencode-pty` is absent.
+ *  5. Injects `<script src="/__oc_android_boot.js"></script>` into main-frame SPA HTML.
  */
 public final class LocalAssetServer {
 
@@ -101,7 +110,25 @@ public final class LocalAssetServer {
             return null;
         }
 
-        // 2. Never intercept static bundles, API, auth, SSE, or PTY endpoints
+        // 2a. Prevent HTTP 500 EACCES when OpenCode lists unreadable Android SELinux ancestor dirs
+        if ("/api/fs/list".equals(path)) {
+            WebResourceResponse virtualFs = maybeInterceptProtectedFsList(context, uri);
+            if (virtualFs != null) {
+                return virtualFs;
+            }
+            return null;
+        }
+
+        // 2b. Ensure /api/info reports accurate persistentPty capability when opencode-pty is absent
+        if ("/api/info".equals(path) && !hasPtyDaemonBinary(context)) {
+            WebResourceResponse patchedInfo = fetchPatchedApiInfo(uri, enginePort);
+            if (patchedInfo != null) {
+                return patchedInfo;
+            }
+            return null;
+        }
+
+        // 3. Pass all static bundles, API, auth, SSE, and PTY endpoints directly to Bun server
         if (path.startsWith("/_assets/") || path.startsWith("/assets/")
                 || path.startsWith("/api/") || path.startsWith("/auth/")
                 || path.startsWith("/event") || path.startsWith("/global/")
@@ -116,7 +143,7 @@ public final class LocalAssetServer {
             return null;
         }
 
-        // 3. Intercept main-frame SPA document to inject __oc_android_boot.js cleanly
+        // 4. Intercept main-frame SPA document to inject __oc_android_boot.js cleanly
         if (isForMainFrame) {
             return fetchAndInjectIndexHtml(uri, enginePort);
         }
@@ -124,25 +151,218 @@ public final class LocalAssetServer {
         return null;
     }
 
+    private static boolean hasPtyDaemonBinary(Context context) {
+        File files = context.getFilesDir();
+        return new File(files, "usr/bin/opencode-pty").canExecute()
+                || new File(files, "runtime/bin/opencode-pty").canExecute();
+    }
+
+    private WebResourceResponse fetchPatchedApiInfo(Uri uri, int port) {
+        HttpURLConnection conn = null;
+        try {
+            conn = openAuthenticatedLoopbackGet(uri.toString(), port, "application/json");
+            if (conn.getResponseCode() != 200) {
+                return null;
+            }
+            String body;
+            try (InputStream in = conn.getInputStream()) {
+                body = IoUtil.readAll(in, "UTF-8");
+            }
+            String patched = body.replace("\"persistentPty\":true", "\"persistentPty\":false");
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Cache-Control", "no-store");
+            return new WebResourceResponse("application/json", "UTF-8", 200, "OK",
+                    headers, new ByteArrayInputStream(patched.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception ignored) {
+            return null;
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+    }
+
+    private WebResourceResponse maybeInterceptProtectedFsList(Context context, Uri uri) {
+        try {
+            String defaultLoc = context.getFilesDir().getAbsolutePath();
+            String locDir = uri.getQueryParameter("directory");
+            if (locDir == null || locDir.trim().isEmpty()) {
+                locDir = defaultLoc;
+            }
+            locDir = normalizePosixPath(locDir);
+
+            String reqPath = uri.getQueryParameter("path");
+            if (reqPath == null || reqPath.trim().isEmpty()) {
+                reqPath = ".";
+            }
+            String target = reqPath.startsWith("/")
+                    ? normalizePosixPath(reqPath)
+                    : normalizePosixPath(locDir + "/" + reqPath);
+
+            // Check if target is actually readable by the OS; if so, let OpenCode's native server handle it
+            File targetFile = new File(target);
+            if (!isAndroidProtectedContainer(target) && targetFile.canRead() && targetFile.list() != null) {
+                return null;
+            }
+
+            List<String> virtualChildren = getVirtualAndroidChildren(context, target);
+            if (virtualChildren == null) {
+                return null;
+            }
+
+            Collections.sort(virtualChildren);
+            JSONArray data = new JSONArray();
+            for (String childAbs : virtualChildren) {
+                String rel = relativizePosix(locDir, childAbs);
+                String entryPath = ".".equals(rel) ? "./" : (rel.endsWith("/") ? rel : rel + "/");
+                JSONObject item = new JSONObject();
+                item.put("path", entryPath);
+                item.put("type", "directory");
+                data.put(item);
+            }
+
+            JSONObject location = new JSONObject();
+            location.put("directory", locDir);
+            JSONObject root = new JSONObject();
+            root.put("location", location);
+            root.put("data", data);
+
+            byte[] bytes = root.toString().getBytes(StandardCharsets.UTF_8);
+            Map<String, String> headers = new HashMap<>();
+            headers.put("Cache-Control", "no-store");
+            return new WebResourceResponse("application/json", "UTF-8", 200, "OK",
+                    headers, new ByteArrayInputStream(bytes));
+        } catch (Exception e) {
+            Log.w(TAG, "maybeInterceptProtectedFsList fallback: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static boolean isAndroidProtectedContainer(String normalizedPath) {
+        return "/".equals(normalizedPath)
+                || "/storage".equals(normalizedPath)
+                || "/storage/emulated".equals(normalizedPath)
+                || "/data".equals(normalizedPath)
+                || "/data/user".equals(normalizedPath)
+                || "/data/user/0".equals(normalizedPath);
+    }
+
+    private static List<String> getVirtualAndroidChildren(Context context, String target) {
+        List<String> out = new ArrayList<>();
+        if ("/".equals(target)) {
+            out.add("/storage");
+            if (new File("/sdcard").exists()) {
+                out.add("/sdcard");
+            }
+            out.add("/data");
+            return out;
+        }
+        if ("/storage".equals(target)) {
+            out.add("/storage/emulated");
+            try {
+                File ext = Environment.getExternalStorageDirectory();
+                if (ext != null) {
+                    String p = normalizePosixPath(ext.getAbsolutePath());
+                    if (p.startsWith("/storage/") && !p.startsWith("/storage/emulated")) {
+                        int nextSlash = p.indexOf('/', "/storage/".length());
+                        out.add(nextSlash > 0 ? p.substring(0, nextSlash) : p);
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            return out;
+        }
+        if ("/storage/emulated".equals(target)) {
+            out.add("/storage/emulated/0");
+            return out;
+        }
+        if ("/data".equals(target)) {
+            out.add("/data/user");
+            return out;
+        }
+        if ("/data/user".equals(target)) {
+            out.add("/data/user/0");
+            return out;
+        }
+        if ("/data/user/0".equals(target)) {
+            out.add("/data/user/0/" + context.getPackageName());
+            return out;
+        }
+        String pkgRoot = "/data/user/0/" + context.getPackageName();
+        if (pkgRoot.equals(target)) {
+            out.add(pkgRoot + "/files");
+            return out;
+        }
+        return null;
+    }
+
+    private static String normalizePosixPath(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "/";
+        }
+        String s = raw.replace('\\', '/');
+        String[] parts = s.split("/");
+        List<String> stack = new ArrayList<>();
+        for (String p : parts) {
+            if (p.isEmpty() || ".".equals(p)) {
+                continue;
+            }
+            if ("..".equals(p)) {
+                if (!stack.isEmpty()) {
+                    stack.remove(stack.size() - 1);
+                }
+            } else {
+                stack.add(p);
+            }
+        }
+        if (stack.isEmpty()) {
+            return "/";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String seg : stack) {
+            sb.append('/').append(seg);
+        }
+        return sb.toString();
+    }
+
+    private static String relativizePosix(String fromDir, String toPath) {
+        String[] from = "/".equals(fromDir) ? new String[0] : fromDir.substring(1).split("/");
+        String[] to = "/".equals(toPath) ? new String[0] : toPath.substring(1).split("/");
+        int common = 0;
+        while (common < from.length && common < to.length && from[common].equals(to[common])) {
+            common++;
+        }
+        StringBuilder sb = new StringBuilder();
+        for (int i = common; i < from.length; i++) {
+            if (sb.length() > 0) sb.append('/');
+            sb.append("..");
+        }
+        for (int i = common; i < to.length; i++) {
+            if (sb.length() > 0) sb.append('/');
+            sb.append(to[i]);
+        }
+        return sb.length() == 0 ? "." : sb.toString();
+    }
+
+    private static HttpURLConnection openAuthenticatedLoopbackGet(String urlStr, int port, String accept) throws Exception {
+        HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        conn.setRequestMethod("GET");
+        conn.setConnectTimeout(2500);
+        conn.setReadTimeout(4000);
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("Accept", accept);
+        String token = CoreRuntimeState.sessionToken;
+        String csrf = CoreRuntimeState.csrfToken;
+        if (token != null && !token.isEmpty()) {
+            conn.setRequestProperty("Cookie", "opencode_session_" + port + "=" + token);
+        } else if (csrf != null && !csrf.isEmpty()) {
+            conn.setRequestProperty("Authorization", CoreReadyProbe.basicAuthHeader(csrf));
+        }
+        return conn;
+    }
+
     private WebResourceResponse fetchAndInjectIndexHtml(Uri uri, int port) {
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(uri.toString());
-            conn = (HttpURLConnection) url.openConnection();
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(2500);
-            conn.setReadTimeout(4000);
-            conn.setInstanceFollowRedirects(true);
-            conn.setRequestProperty("Accept", "text/html,application/xhtml+xml");
-
-            String token = CoreRuntimeState.sessionToken;
-            String csrf = CoreRuntimeState.csrfToken;
-            if (token != null && !token.isEmpty()) {
-                conn.setRequestProperty("Cookie", "opencode_session_" + port + "=" + token);
-            } else if (csrf != null && !csrf.isEmpty()) {
-                conn.setRequestProperty("Authorization", CoreReadyProbe.basicAuthHeader(csrf));
-            }
-
+            conn = openAuthenticatedLoopbackGet(uri.toString(), port, "text/html,application/xhtml+xml");
             int status = conn.getResponseCode();
             String contentType = conn.getContentType();
             if (status != 200 || contentType == null || !contentType.toLowerCase().contains("text/html")) {

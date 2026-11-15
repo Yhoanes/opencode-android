@@ -30,7 +30,7 @@
     });
   }
 
-  // Exact UTF-8 base64url encoder matching OpenCode's _assets/encode-*.js
+  // Exact UTF-8 base64url encoder/decoder matching OpenCode's _assets/encode-*.js
   function encodeBase64Url(str) {
     var bytes = new TextEncoder().encode(str);
     var bin = "";
@@ -54,10 +54,14 @@
     }
   }
 
-  // 1. Ensure initial workspace defaults to /storage/emulated/0/Documents/OpenCode instead of internal files/
+  // 1. One-time initial default workspace seed (/storage/emulated/0/Documents/OpenCode)
+  //    Persisted in localStorage so explicit navigation to $HOME later is respected (OC-05).
   function ensureDefaultWorkspaceRoute() {
     if (!host || typeof host.getConfig !== "function") return false;
     try {
+      if (localStorage.getItem("__oc_default_ws_seeded_v2") === "1") {
+        return false;
+      }
       var cfg = JSON.parse(host.getConfig() || "{}");
       var filesDir = cfg.home || "/data/user/0/com.oc.ide/files";
       var workspaceDir = cfg.workspaceDir || "/storage/emulated/0/Documents/OpenCode";
@@ -67,11 +71,8 @@
       var wsSlug = encodeBase64Url(workspaceDir);
       var path = window.location.pathname || "/";
 
-      if (
-        (path === "/" + filesSlug || path.indexOf("/" + filesSlug + "/") === 0) &&
-        !sessionStorage.getItem("__oc_ws_redirected_v2")
-      ) {
-        sessionStorage.setItem("__oc_ws_redirected_v2", "1");
+      if (path === "/" + filesSlug || path.indexOf("/" + filesSlug + "/") === 0) {
+        localStorage.setItem("__oc_default_ws_seeded_v2", "1");
         window.location.replace("/" + wsSlug + "/session");
         return true;
       }
@@ -79,24 +80,23 @@
     return false;
   }
 
-  // Watch SPA route changes during initial boot in case SolidJS redirects `/` -> `/<filesSlug>/session`
   var origReplaceState = history.replaceState;
   var origPushState = history.pushState;
   history.replaceState = function () {
     var r = origReplaceState.apply(this, arguments);
     ensureDefaultWorkspaceRoute();
-    scheduleNativeSettingsSync();
+    scheduleNativeUiSync();
     return r;
   };
   history.pushState = function () {
     var r = origPushState.apply(this, arguments);
     ensureDefaultWorkspaceRoute();
-    scheduleNativeSettingsSync();
+    scheduleNativeUiSync();
     return r;
   };
   window.addEventListener("popstate", function () {
     ensureDefaultWorkspaceRoute();
-    scheduleNativeSettingsSync();
+    scheduleNativeUiSync();
   });
 
   if (ensureDefaultWorkspaceRoute()) {
@@ -114,11 +114,16 @@
     }
   } catch (e) {}
 
-  // 3. Dismiss native splash once OpenCode's SolidJS #root mounts
+  // 3. Dismiss native splash once OpenCode's SolidJS #root mounts (cancels fallback timer cleanly)
   var uiSignaled = false;
+  var safetyReadyTimer = null;
   function signalUiReady() {
     if (uiSignaled) return;
     uiSignaled = true;
+    if (safetyReadyTimer !== null) {
+      clearTimeout(safetyReadyTimer);
+      safetyReadyTimer = null;
+    }
     try {
       if (host && typeof host.onUiReady === "function") {
         host.onUiReady();
@@ -129,6 +134,10 @@
   function checkRootReady() {
     var root = document.getElementById("root");
     if (root && root.childNodes && root.childNodes.length > 0) {
+      if (safetyReadyTimer !== null) {
+        clearTimeout(safetyReadyTimer);
+        safetyReadyTimer = null;
+      }
       requestAnimationFrame(function () {
         requestAnimationFrame(signalUiReady);
       });
@@ -188,8 +197,10 @@
       var docLang = (document.documentElement.lang || "").toLowerCase();
       if (docLang.indexOf("es") === 0) return true;
       if (docLang.indexOf("en") === 0) return false;
-      var heading = document.querySelector(".settings-extension-heading, .settings-tab-header h2");
-      if (heading && /extensiones|disponible|proveedores|acerca/i.test(heading.textContent || "")) {
+      var heading = document.querySelector(
+        ".settings-extension-heading, .settings-tab-header h2, .directory-picker [data-slot='dialog-title']"
+      );
+      if (heading && /extensiones|disponible|proveedores|acerca|proyecto|carpeta/i.test(heading.textContent || "")) {
         return true;
       }
       return (navigator.language || "").toLowerCase().indexOf("es") === 0;
@@ -202,9 +213,10 @@
     return isSpanishUi() ? esText : enText;
   }
 
-  // 7. Native OpenCode Settings Integration:
-  //    (A) Ajustes -> Extensiones -> Plugins (native .settings-extension-row catalog)
-  //    (B) Ajustes -> Acerca de (native .settings-about-link OTA update action)
+  // 7. Native OpenCode Integrations (zero foreign floating buttons):
+  //    (A) Settings -> Extensions -> Plugins (native .settings-extension-row catalog)
+  //    (B) Settings -> About (native .settings-about-link GitHub Releases OTA updater)
+  //    (C) DirectoryPickerDialog (.directory-picker-actions -> Storage & Android File Manager)
   var REMOTE_CATALOG_URL =
     "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/catalog.json";
   var catalogCache = null;
@@ -213,11 +225,28 @@
   var pluginErrors = {};
   var currentSearchQuery = "";
   var latestUpdateState = { type: "idle" };
+  var dirPickerCallbacks = {};
+  var dirPickerSeq = 0;
 
-  window.__onNativeUpdaterState = function (st) {
+  function handleNativeUpdaterState(st) {
+    if (!st) return;
+    if (typeof st === "string") {
+      try { st = JSON.parse(st); } catch (e) { return; }
+    }
     if (st && typeof st === "object") {
       latestUpdateState = st;
       updateAboutLinkLabel();
+    }
+  }
+  window.__ocOnUpdaterStateChanged = handleNativeUpdaterState;
+  window.__agOnUpdaterStateChanged = handleNativeUpdaterState;
+  window.__onNativeUpdaterState = handleNativeUpdaterState;
+
+  window.__ocOnDirectoryPicked = function (cbId, chosenPath) {
+    var fn = cbId && dirPickerCallbacks[cbId];
+    if (cbId) delete dirPickerCallbacks[cbId];
+    if (typeof fn === "function") {
+      fn(chosenPath || "");
     }
   };
 
@@ -242,6 +271,7 @@
         if (parsedCat && Array.isArray(parsedCat.plugins) && parsedCat.plugins.length > 0) {
           catalogCache = parsedCat.plugins;
           cb(catalogCache);
+          refreshRemoteCatalogInBackground(catalogCache);
           return;
         }
       } catch (e) {}
@@ -256,43 +286,49 @@
         catalogCache = list;
         catalogFetching = false;
         cb(list);
-
-        fetch(REMOTE_CATALOG_URL, { cache: "no-store" })
-          .then(function (r) { return r.ok ? r.json() : null; })
-          .then(function (remote) {
-            if (!remote || !remote.search || !Array.isArray(remote.search.customizations)) return;
-            var byName = {};
-            list.forEach(function (p) { byName[p.name] = p; });
-            remote.search.customizations.forEach(function (c) {
-              if (!c || !c.id) return;
-              var slug = String(c.id).split("/").pop();
-              var url = c.source && c.source.archive && c.source.archive.url;
-              if (!slug || !url) return;
-              if (!byName[slug]) {
-                var item = {
-                  name: slug,
-                  displayName: c.displayName || slug,
-                  version: c.version || "1.0.0",
-                  description: c.description || "",
-                  descriptionEs: c.description || "",
-                  archiveUrl: url
-                };
-                list.push(item);
-                byName[slug] = item;
-              } else {
-                byName[slug].archiveUrl = url;
-                if (c.version) byName[slug].version = c.version;
-              }
-            });
-            catalogCache = list;
-            renderPluginsCatalogIfMounted(true);
-          })
-          .catch(function () {});
+        refreshRemoteCatalogInBackground(list);
       })
       .catch(function () {
         catalogFetching = false;
         cb([]);
       });
+  }
+
+  var remoteRefreshed = false;
+  function refreshRemoteCatalogInBackground(list) {
+    if (remoteRefreshed) return;
+    remoteRefreshed = true;
+    fetch(REMOTE_CATALOG_URL, { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (remote) {
+        if (!remote || !remote.search || !Array.isArray(remote.search.customizations)) return;
+        var byName = {};
+        list.forEach(function (p) { byName[p.name] = p; });
+        remote.search.customizations.forEach(function (c) {
+          if (!c || !c.id) return;
+          var slug = String(c.id).split("/").pop();
+          var url = c.source && c.source.archive && c.source.archive.url;
+          if (!slug || !url) return;
+          if (!byName[slug]) {
+            var item = {
+              name: slug,
+              displayName: c.displayName || slug,
+              version: c.version || "1.0.0",
+              description: c.description || "",
+              descriptionEs: c.description || "",
+              archiveUrl: url
+            };
+            list.push(item);
+            byName[slug] = item;
+          } else {
+            byName[slug].archiveUrl = url;
+            if (c.version) byName[slug].version = c.version;
+          }
+        });
+        catalogCache = list;
+        renderPluginsCatalogIfMounted(true);
+      })
+      .catch(function () {});
   }
 
   // Trigger OpenCode's in-memory /api/location/reload so MCP & Skills tabs refresh immediately over SSE
@@ -335,11 +371,11 @@
     return svg;
   }
 
-  function createNativeButton(label, variant, disabled, onClick) {
+  function createNativeButton(label, variant, size, disabled, onClick) {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.setAttribute("data-component", "button-v2");
-    btn.setAttribute("data-size", "small");
+    btn.setAttribute("data-size", size || "small");
     btn.setAttribute("data-variant", variant);
     if (disabled) {
       btn.disabled = true;
@@ -479,10 +515,26 @@
     return pluginsPanel.querySelector(".settings-section") || pluginsPanel;
   }
 
-  function readSettingsSearchQuery() {
-    var inp = document.querySelector(
+  // Bind input listener ONLY to Settings search input (never global document input — fixes OC-05)
+  function findAndBindSettingsSearchInput() {
+    var scope = document.querySelector(".settings-extensions-tabs")
+      ? (document.querySelector(".settings-extensions-tabs").parentElement || document)
+      : null;
+    if (!scope) return null;
+    var inp = scope.querySelector(
       '.settings-search input, input[type="search"], input[placeholder*="Buscar"], input[placeholder*="Search"]'
     );
+    if (inp && !inp.hasAttribute("data-oc-search-bound")) {
+      inp.setAttribute("data-oc-search-bound", "1");
+      inp.addEventListener("input", function () {
+        renderPluginsCatalogIfMounted(false);
+      });
+    }
+    return inp;
+  }
+
+  function readSettingsSearchQuery() {
+    var inp = findAndBindSettingsSearchInput();
     return inp && inp.value ? String(inp.value).trim().toLowerCase() : "";
   }
 
@@ -598,7 +650,7 @@
             ? tr("Instalando…", "Installing…")
             : tr("Instalar", "Install");
           trailing.appendChild(
-            createNativeButton(instLabel, "submit", !!busyState, function () {
+            createNativeButton(instLabel, "submit", "small", !!busyState, function () {
               handleInstallPlugin(p);
             })
           );
@@ -607,7 +659,7 @@
             ? tr("Quitando…", "Removing…")
             : tr("Desinstalar", "Uninstall");
           trailing.appendChild(
-            createNativeButton(uninstLabel, "ghost-muted", !!busyState, function () {
+            createNativeButton(uninstLabel, "ghost-muted", "small", !!busyState, function () {
               handleUninstallPlugin(p);
             })
           );
@@ -629,19 +681,31 @@
     var btn = document.querySelector('[data-oc-about-update="1"] button');
     if (!btn) return;
     var st = latestUpdateState || { type: "idle" };
-    if (st.type === "checking") {
+    var t = st.type || "idle";
+    var ver = (st.update && st.update.version) || st.version || "";
+    var installedVer = st.installedVersion || (host && host.getAppVersion ? host.getAppVersion() : "");
+
+    if (t === "checking" || t === "checking for updates") {
       btn.textContent = tr("Buscando actualizaciones…", "Checking for updates…");
-    } else if (st.type === "downloading") {
-      var pct = typeof st.progress === "number" ? " (" + Math.round(st.progress) + "%)" : "";
-      btn.textContent = tr("Descargando actualización" + pct + "…", "Downloading update" + pct + "…");
-    } else if (st.type === "ready") {
+    } else if (t === "available for download" || t === "downloading") {
+      var pct = typeof st.progress === "number" && st.progress >= 0
+        ? " (" + Math.round(st.progress) + "%)"
+        : "";
       btn.textContent = tr(
-        "Instalar actualización disponible (v" + (st.version || "") + ")",
-        "Install available update (v" + (st.version || "") + ")"
+        "Descargando actualización" + (ver ? " v" + ver : "") + pct + "…",
+        "Downloading update" + (ver ? " v" + ver : "") + pct + "…"
       );
-    } else if (st.type === "up-to-date") {
-      btn.textContent = tr("OpenCode está actualizado", "OpenCode is up to date");
-    } else if (st.type === "error") {
+    } else if (t === "ready") {
+      btn.textContent = tr(
+        "Instalar actualización disponible" + (ver ? " (v" + ver + ")" : ""),
+        "Install available update" + (ver ? " (v" + ver + ")" : "")
+      );
+    } else if (st.result === "up-to-date") {
+      btn.textContent = tr(
+        "OpenCode está actualizado" + (installedVer ? " (v" + installedVer + ")" : "") + " · Buscar de nuevo",
+        "OpenCode is up to date" + (installedVer ? " (v" + installedVer + ")" : "") + " · Check again"
+      );
+    } else if (st.result === "error") {
       btn.textContent = tr("Reintentar búsqueda de actualizaciones", "Retry update check");
     } else {
       btn.textContent = tr("Buscar actualizaciones", "Check for updates");
@@ -671,7 +735,7 @@
       if (latestUpdateState && latestUpdateState.type === "ready") {
         if (typeof host.applyAppUpdate === "function") host.applyAppUpdate();
       } else {
-        latestUpdateState = { type: "checking" };
+        latestUpdateState = { type: "checking for updates" };
         updateAboutLinkLabel();
         if (typeof host.checkForAppUpdates === "function") host.checkForAppUpdates(true);
       }
@@ -681,23 +745,192 @@
     updateAboutLinkLabel();
   }
 
+  // (C) Native Android Storage & System Folder Picker inside OpenCode's DirectoryPickerDialog
+  function getExtStorageRoot() {
+    if (host && typeof host.getExternalStoragePath === "function") {
+      try {
+        var p = host.getExternalStoragePath();
+        if (p && p.charAt(0) === "/") return p;
+      } catch (e) {}
+    }
+    return "/storage/emulated/0";
+  }
+
+  function navigateDirectoryPickerTo(picker, targetPath) {
+    if (!picker || !targetPath) return false;
+    var inp = picker.querySelector("input.directory-picker-input") || picker.querySelector('input[role="combobox"]');
+    if (!inp) return false;
+    try {
+      var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+      if (setter && setter.set) {
+        setter.set.call(inp, targetPath);
+      } else {
+        inp.value = targetPath;
+      }
+      inp.dispatchEvent(new Event("input", { bubbles: true }));
+      inp.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          code: "Enter",
+          keyCode: 13,
+          which: 13,
+          bubbles: true,
+          cancelable: true
+        })
+      );
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function confirmPickedDirectoryInDialog(chosenPath) {
+    if (!chosenPath) return;
+    var picker = document.querySelector(".directory-picker");
+    if (picker && navigateDirectoryPickerTo(picker, chosenPath)) {
+      var tries = 0;
+      var poll = setInterval(function () {
+        tries++;
+        var activePicker = document.querySelector(".directory-picker");
+        if (!activePicker) {
+          clearInterval(poll);
+          return;
+        }
+        var selTextEl = activePicker.querySelector(".directory-picker-selection-text");
+        var submitBtn = activePicker.querySelector('button[data-variant="contrast"]');
+        var selText = selTextEl ? (selTextEl.textContent || "") : "";
+        var leaf = chosenPath.split("/").filter(Boolean).pop() || "";
+        if (submitBtn && !submitBtn.disabled && (!leaf || selText.indexOf(leaf) !== -1 || tries >= 8)) {
+          clearInterval(poll);
+          submitBtn.click();
+          return;
+        }
+        if (tries >= 24) {
+          clearInterval(poll);
+          window.location.assign("/" + encodeBase64Url(chosenPath) + "/session");
+        }
+      }, 60);
+    } else {
+      window.location.assign("/" + encodeBase64Url(chosenPath) + "/session");
+    }
+  }
+
+  function mountDirectoryPickerAndroidActions() {
+    if (!host) return;
+    var picker = document.querySelector(".directory-picker");
+    if (!picker) return;
+    var actions = picker.querySelector(".directory-picker-actions");
+    if (!actions || actions.querySelector('[data-oc-android-dir-btn="1"]')) return;
+
+    // Only enhance folder-selection mode (skip single-file picker mode)
+    var submitBtn = picker.querySelector('button[data-variant="contrast"]');
+    if (submitBtn && /archivo|file/i.test(submitBtn.textContent || "")) {
+      return;
+    }
+
+    var extPath = getExtStorageRoot();
+
+    // 1. Quick jump to /storage/emulated/0 inside OpenCode's built-in tree
+    var storageBtn = createNativeButton(
+      tr("Almacenamiento", "Storage"),
+      "ghost",
+      "normal",
+      false,
+      function (ev) {
+        ev.preventDefault();
+        navigateDirectoryPickerTo(picker, extPath);
+      }
+    );
+    storageBtn.setAttribute("data-oc-android-dir-btn", "1");
+
+    // 2. Native Android File Manager folder picker (supports creating new folders natively)
+    var safBtn = createNativeButton(
+      tr("Gestor de archivos", "File Manager"),
+      "secondary",
+      "normal",
+      false,
+      function (ev) {
+        ev.preventDefault();
+        if (typeof host.pickProjectDirectory !== "function") return;
+        var cbId = "dir_" + (++dirPickerSeq) + "_" + Date.now();
+        dirPickerCallbacks[cbId] = function (chosenPath) {
+          if (chosenPath) {
+            confirmPickedDirectoryInDialog(chosenPath);
+          }
+        };
+        host.pickProjectDirectory(cbId);
+      }
+    );
+    safBtn.setAttribute("data-oc-android-dir-btn", "2");
+
+    actions.insertBefore(safBtn, actions.firstChild);
+    actions.insertBefore(storageBtn, safBtn.nextSibling);
+
+    // Default initial folder tree to /storage/emulated/0 instead of internal /data/user/0 sandbox
+    if (!picker.hasAttribute("data-oc-storage-defaulted")) {
+      picker.setAttribute("data-oc-storage-defaulted", "1");
+      setTimeout(function () {
+        var curPicker = document.querySelector(".directory-picker");
+        if (!curPicker) return;
+        var inp = curPicker.querySelector("input.directory-picker-input");
+        var sel = curPicker.querySelector(".directory-picker-selection-text");
+        var selTxt = sel ? (sel.textContent || "").trim() : "";
+        if ((!inp || !inp.value) && (!selTxt || selTxt === "~" || selTxt.indexOf("/data/user/") === 0)) {
+          navigateDirectoryPickerTo(curPicker, extPath);
+        }
+      }, 180);
+    }
+  }
+
   var syncScheduled = false;
-  function scheduleNativeSettingsSync() {
+  function scheduleNativeUiSync() {
     if (syncScheduled) return;
     syncScheduled = true;
     requestAnimationFrame(function () {
       syncScheduled = false;
       cleanupLegacyFloatingNodes();
-      renderPluginsCatalogIfMounted(false);
-      mountAboutUpdaterIfVisible();
+      if (document.querySelector(".settings-extensions-tabs")) {
+        renderPluginsCatalogIfMounted(false);
+      }
+      if (document.querySelector(".settings-about-details")) {
+        mountAboutUpdaterIfVisible();
+      }
+      if (document.querySelector(".directory-picker")) {
+        mountDirectoryPickerAndroidActions();
+      }
     });
   }
 
-  document.addEventListener("input", function (ev) {
-    if (ev && ev.target && ev.target.tagName === "INPUT") {
-      renderPluginsCatalogIfMounted(false);
+  function hasActionableSurfaceInMutations(mutations) {
+    if (
+      document.querySelector(".settings-extensions-tabs") ||
+      document.querySelector(".settings-about-details") ||
+      document.querySelector(".directory-picker")
+    ) {
+      return true;
     }
-  });
+    for (var i = 0; i < mutations.length; i++) {
+      var m = mutations[i];
+      if (m.type === "childList" && m.addedNodes && m.addedNodes.length > 0) {
+        for (var j = 0; j < m.addedNodes.length; j++) {
+          var node = m.addedNodes[j];
+          if (node && node.nodeType === 1) {
+            var cls = typeof node.className === "string" ? node.className : "";
+            if (
+              cls.indexOf("settings") !== -1 ||
+              cls.indexOf("dialog") !== -1 ||
+              cls.indexOf("directory-picker") !== -1 ||
+              (node.querySelector &&
+                node.querySelector(".settings-extensions-tabs, .settings-about-details, .directory-picker"))
+            ) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+    return false;
+  }
 
   function initOnDomReady() {
     cleanupLegacyFloatingNodes();
@@ -710,10 +943,12 @@
       readyObs.observe(document.documentElement, { childList: true, subtree: true });
     }
     syncHostTheme();
-    scheduleNativeSettingsSync();
+    scheduleNativeUiSync();
 
-    var uiObs = new MutationObserver(function () {
-      scheduleNativeSettingsSync();
+    var uiObs = new MutationObserver(function (mutations) {
+      if (hasActionableSurfaceInMutations(mutations)) {
+        scheduleNativeUiSync();
+      }
     });
     if (document.body) {
       uiObs.observe(document.body, {
@@ -731,5 +966,5 @@
     initOnDomReady();
   }
 
-  setTimeout(signalUiReady, 3800);
+  safetyReadyTimer = setTimeout(signalUiReady, 6000);
 })();

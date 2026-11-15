@@ -53,6 +53,7 @@ public class MainActivity extends Activity
     private static final int REQUEST_STORAGE = 100;
     private static final int REQUEST_FILE_CHOOSER = 1002;
     private static final int REQUEST_AUDIO_PERMISSION = 1003;
+    private static final int REQUEST_DIRECTORY_PICKER = 1004;
     private static final long SPLASH_TIMEOUT_MS = 45000;
     private static final long POLL_INTERVAL_MS = 50;
 
@@ -61,6 +62,7 @@ public class MainActivity extends Activity
     private ValueCallback<Uri[]> filePathCallback;
     private android.webkit.PermissionRequest pendingWebPermissionRequest;
     private String pendingMicJsCallbackId;
+    private String pendingDirectoryJsCallbackId;
     private boolean startupAudioPermissionRequested = false;
 
     private ThemeManager themeManager;
@@ -517,6 +519,133 @@ public class MainActivity extends Activity
                 filePathCallback.onReceiveValue(results);
                 filePathCallback = null;
             }
+            return;
+        }
+        if (requestCode == REQUEST_DIRECTORY_PICKER) {
+            String cbId = this.pendingDirectoryJsCallbackId;
+            this.pendingDirectoryJsCallbackId = null;
+            String resolvedPath = "";
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                Uri treeUri = data.getData();
+                try {
+                    int takeFlags = data.getFlags()
+                            & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    if (takeFlags == 0) {
+                        takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+                    }
+                    getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+                } catch (Throwable ignored) {
+                }
+                resolvedPath = resolveDocumentTreeUriToPath(treeUri);
+                if (resolvedPath != null && !resolvedPath.isEmpty()) {
+                    try {
+                        java.io.File dir = new java.io.File(resolvedPath);
+                        if (!dir.exists()) {
+                            dir.mkdirs();
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            resolveDirectoryJsCallback(cbId, resolvedPath != null ? resolvedPath : "");
+        }
+    }
+
+    public void pickProjectDirectoryFromJs(final String callbackId) {
+        handler.post(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                    && !android.os.Environment.isExternalStorageManager()) {
+                android.widget.Toast.makeText(
+                        this,
+                        "Activa acceso a archivos para abrir carpetas del dispositivo",
+                        android.widget.Toast.LENGTH_LONG).show();
+                requestStoragePermissions();
+                resolveDirectoryJsCallback(callbackId, "");
+                return;
+            }
+            this.pendingDirectoryJsCallbackId = callbackId;
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        Uri initialUri = android.provider.DocumentsContract.buildDocumentUri(
+                                "com.android.externalstorage.documents", "primary:Documents");
+                        intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, initialUri);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                startActivityForResult(intent, REQUEST_DIRECTORY_PICKER);
+            } catch (Throwable t) {
+                Log.e(TAG, "Cannot launch ACTION_OPEN_DOCUMENT_TREE: " + t.getMessage());
+                this.pendingDirectoryJsCallbackId = null;
+                resolveDirectoryJsCallback(callbackId, "");
+            }
+        });
+    }
+
+    private void resolveDirectoryJsCallback(final String callbackId, final String path) {
+        if (webViewHost == null || webViewHost.getWebView() == null) {
+            return;
+        }
+        final String safeId = callbackId == null ? "" : callbackId;
+        final String safePath = path == null ? "" : path;
+        handler.post(() -> {
+            try {
+                webViewHost.getWebView().evaluateJavascript(
+                        "window.__ocOnDirectoryPicked&&window.__ocOnDirectoryPicked("
+                                + org.json.JSONObject.quote(safeId) + ","
+                                + org.json.JSONObject.quote(safePath) + ");",
+                        null);
+            } catch (Throwable ignored) {
+            }
+        });
+    }
+
+    private String resolveDocumentTreeUriToPath(Uri treeUri) {
+        if (treeUri == null) {
+            return "";
+        }
+        try {
+            if ("file".equalsIgnoreCase(treeUri.getScheme())) {
+                return treeUri.getPath() != null ? treeUri.getPath() : "";
+            }
+            String docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri);
+            if (docId == null || docId.isEmpty()) {
+                return "";
+            }
+            if (docId.startsWith("raw:")) {
+                return docId.substring(4);
+            }
+            if (docId.startsWith("/")) {
+                return docId;
+            }
+            String extRoot = android.os.Environment.getExternalStorageDirectory().getAbsolutePath();
+            int colon = docId.indexOf(':');
+            String volume = colon >= 0 ? docId.substring(0, colon) : docId;
+            String rel = colon >= 0 ? docId.substring(colon + 1) : "";
+            while (rel.startsWith("/")) {
+                rel = rel.substring(1);
+            }
+            if ("primary".equalsIgnoreCase(volume) || "0".equals(volume)) {
+                return rel.isEmpty() ? extRoot : (extRoot + "/" + rel);
+            }
+            if ("home".equalsIgnoreCase(volume)) {
+                String docsRoot = extRoot + "/Documents";
+                return rel.isEmpty() ? docsRoot : (docsRoot + "/" + rel);
+            }
+            java.io.File storageVol = new java.io.File("/storage", volume);
+            if (storageVol.exists()) {
+                String volPath = storageVol.getAbsolutePath();
+                return rel.isEmpty() ? volPath : (volPath + "/" + rel);
+            }
+            return rel.isEmpty() ? extRoot : (extRoot + "/" + rel);
+        } catch (Throwable t) {
+            Log.w(TAG, "resolveDocumentTreeUriToPath fallback: " + t.getMessage());
+            return "";
         }
     }
 

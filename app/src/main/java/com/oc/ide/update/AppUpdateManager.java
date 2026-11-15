@@ -18,6 +18,7 @@ import android.util.Log;
 import android.webkit.WebView;
 import android.widget.Toast;
 
+import com.oc.ide.runtime.RuntimeConfig;
 import com.oc.ide.shell.RishLocator;
 import com.oc.ide.shell.ShizukuBridge;
 import com.oc.ide.ui.MainActivity;
@@ -38,12 +39,13 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Map;
 
 /**
- * Native in-app auto-updater backing window.electronUpdater on Android.
- * Checks GitHub Releases (Yhoanes/antigravity-android), downloads newer APKs
- * in the background, exposes "Restart to Update", and installs silently via
+ * Native in-app auto-updater for OpenCode for Android.
+ * Checks GitHub Releases (Yhoanes/opencode-android), downloads newer APKs
+ * in the background with live progress, and installs silently via
  * Shizuku (pm install -r -d) or via Android's standard PackageInstaller.
  */
 public final class AppUpdateManager {
@@ -58,7 +60,7 @@ public final class AppUpdateManager {
 
     private static final String RELEASES_LATEST_URL =
             "https://api.github.com/repos/Yhoanes/opencode-android/releases/latest";
-    private static final String USER_AGENT = "OpenCode-Android-Updater/2.3.0-r1";
+    private static final String USER_AGENT = "OpenCode-Android-Updater/" + RuntimeConfig.CORE_VERSION;
     private static final long MIN_AUTO_CHECK_GAP_MS = 45_000L;
     private static final String UPDATES_CHANNEL_ID = "oc_updates_channel";
     private static final String UPDATE_NOTIFICATION_TAG = "oc_ota_ready";
@@ -71,12 +73,28 @@ public final class AppUpdateManager {
 
     private volatile String stateType = STATE_IDLE;
     private volatile String targetVersion = null;
+    private volatile int downloadProgress = -1;
+    private volatile String lastCheckResult = "";
+    private volatile String lastError = null;
     private volatile String lastNotifiedVersion = null;
     private volatile boolean checkInFlight = false;
     private volatile long lastCheckStartedMs = 0L;
     private volatile boolean initialAutoCheckScheduled = false;
     private volatile boolean pendingInstallAfterPermission = false;
     private volatile WebView activeWebView;
+
+    private static boolean isSpanishLocale() {
+        try {
+            String lang = Locale.getDefault().getLanguage();
+            return lang != null && lang.toLowerCase(Locale.ROOT).startsWith("es");
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    private static String tr(String es, String en) {
+        return isSpanishLocale() ? es : en;
+    }
 
     private AppUpdateManager(Context context) {
         this.appContext = context.getApplicationContext();
@@ -153,12 +171,27 @@ public final class AppUpdateManager {
             JSONObject obj = new JSONObject();
             String st = this.stateType;
             String ver = this.targetVersion;
+            int prog = this.downloadProgress;
+            String res = this.lastCheckResult;
+            String err = this.lastError;
             obj.put("type", st);
-            if (ver != null && !ver.isEmpty()
-                    && (STATE_AVAILABLE.equals(st) || STATE_DOWNLOADING.equals(st) || STATE_READY.equals(st))) {
-                JSONObject upd = new JSONObject();
-                upd.put("version", ver);
-                obj.put("update", upd);
+            obj.put("installedVersion", getInstalledVersion());
+            if (ver != null && !ver.isEmpty()) {
+                obj.put("version", ver);
+                if (STATE_AVAILABLE.equals(st) || STATE_DOWNLOADING.equals(st) || STATE_READY.equals(st)) {
+                    JSONObject upd = new JSONObject();
+                    upd.put("version", ver);
+                    obj.put("update", upd);
+                }
+            }
+            if (STATE_DOWNLOADING.equals(st) && prog >= 0) {
+                obj.put("progress", prog);
+            }
+            if (res != null && !res.isEmpty()) {
+                obj.put("result", res);
+            }
+            if (err != null && !err.isEmpty()) {
+                obj.put("error", err);
             }
             return obj.toString();
         } catch (Throwable t) {
@@ -169,6 +202,16 @@ public final class AppUpdateManager {
     private void updateState(String newType, String version) {
         this.stateType = newType;
         this.targetVersion = version;
+        if (!STATE_DOWNLOADING.equals(newType)) {
+            this.downloadProgress = -1;
+        }
+        emitStateToWebView();
+        if (STATE_READY.equals(newType) && version != null && !version.isEmpty()) {
+            postUpdateReadyNotification(version);
+        }
+    }
+
+    private void emitStateToWebView() {
         final String json = getStateJson();
         mainHandler.post(() -> {
             WebView wv = activeWebView;
@@ -181,16 +224,15 @@ public final class AppUpdateManager {
             if (wv != null) {
                 try {
                     wv.evaluateJavascript(
-                            "window.__agOnUpdaterStateChanged&&window.__agOnUpdaterStateChanged("
-                                    + json + ");",
+                            "(function(s){"
+                                    + "if(window.__ocOnUpdaterStateChanged)window.__ocOnUpdaterStateChanged(s);"
+                                    + "if(window.__agOnUpdaterStateChanged)window.__agOnUpdaterStateChanged(s);"
+                                    + "})(" + json + ");",
                             null);
                 } catch (Throwable ignored) {
                 }
             }
         });
-        if (STATE_READY.equals(newType) && version != null && !version.isEmpty()) {
-            postUpdateReadyNotification(version);
-        }
     }
 
     private void showToast(final String message) {
@@ -214,7 +256,7 @@ public final class AppUpdateManager {
             }
         } catch (Throwable ignored) {
         }
-        return "2.32.1-r1";
+        return normalizeVersion(RuntimeConfig.CORE_VERSION);
     }
 
     public static String normalizeVersion(String raw) {
@@ -316,13 +358,14 @@ public final class AppUpdateManager {
         long now = System.currentTimeMillis();
         if (checkInFlight) {
             if (manual) {
-                showToast("Checking for updates…");
+                showToast(tr("Buscando actualizaciones…", "Checking for updates…"));
             }
             return;
         }
         if (STATE_READY.equals(stateType) && targetVersion != null && getStagedApkFile(appContext).isFile()) {
             if (manual) {
-                showToast("Update v" + targetVersion + " is ready — tap Restart to Update");
+                showToast(tr("Actualización v" + targetVersion + " lista para instalar",
+                        "Update v" + targetVersion + " is ready to install"));
             }
             updateState(STATE_READY, targetVersion);
             return;
@@ -339,29 +382,45 @@ public final class AppUpdateManager {
             } finally {
                 checkInFlight = false;
             }
-        }, "AgyAppUpdater");
+        }, "OcAppUpdater");
         worker.setDaemon(true);
         worker.start();
     }
 
     private void runUpdateCheck(boolean manual) {
+        this.lastCheckResult = "";
+        this.lastError = null;
         updateState(STATE_CHECKING, null);
         try {
+            String installedVer = getInstalledVersion();
             JSONObject release = fetchJsonFollowRedirects(RELEASES_LATEST_URL);
-            String tagName = release.optString("tag_name", "").trim();
-            if (tagName.isEmpty()) {
+            if (release == null) {
+                // HTTP 404 on /releases/latest means no newer release has been published yet
+                this.lastCheckResult = "up-to-date";
                 updateState(STATE_IDLE, null);
                 if (manual) {
-                    showToast("Could not read release version");
+                    showToast(tr("OpenCode está actualizado (v" + installedVer + ")",
+                            "OpenCode is up to date (v" + installedVer + ")"));
+                }
+                return;
+            }
+            String tagName = release.optString("tag_name", "").trim();
+            if (tagName.isEmpty()) {
+                this.lastCheckResult = "up-to-date";
+                updateState(STATE_IDLE, null);
+                if (manual) {
+                    showToast(tr("OpenCode está actualizado (v" + installedVer + ")",
+                            "OpenCode is up to date (v" + installedVer + ")"));
                 }
                 return;
             }
             String remoteVer = normalizeVersion(tagName);
-            String installedVer = getInstalledVersion();
             if (!isRemoteNewer(installedVer, remoteVer)) {
+                this.lastCheckResult = "up-to-date";
                 updateState(STATE_IDLE, null);
                 if (manual) {
-                    showToast("OpenCode is up to date (v" + installedVer + ")");
+                    showToast(tr("OpenCode está actualizado (v" + installedVer + ")",
+                            "OpenCode is up to date (v" + installedVer + ")"));
                 }
                 return;
             }
@@ -369,9 +428,11 @@ public final class AppUpdateManager {
             JSONArray assets = release.optJSONArray("assets");
             JSONObject chosenAsset = selectApkAsset(assets);
             if (chosenAsset == null) {
+                this.lastCheckResult = "up-to-date";
                 updateState(STATE_IDLE, null);
                 if (manual) {
-                    showToast("Release v" + remoteVer + " has no APK asset yet");
+                    showToast(tr("La versión v" + remoteVer + " aún no incluye APK",
+                            "Release v" + remoteVer + " has no APK asset yet"));
                 }
                 return;
             }
@@ -391,15 +452,18 @@ public final class AppUpdateManager {
                         .getPackageArchiveInfo(stagedApk.getAbsolutePath(), 0);
                 if (archiveInfo != null && remoteVer.equals(normalizeVersion(archiveInfo.versionName))) {
                     writeStagedMeta(stagedMeta, remoteVer, stagedApk.length());
+                    this.lastCheckResult = "ready";
                     updateState(STATE_READY, remoteVer);
                     if (manual) {
-                        showToast("Update v" + remoteVer + " ready to install");
+                        showToast(tr("Actualización v" + remoteVer + " lista para instalar",
+                                "Update v" + remoteVer + " ready to install"));
                     }
                     return;
                 }
             }
 
             updateState(STATE_AVAILABLE, remoteVer);
+            this.downloadProgress = 0;
             updateState(STATE_DOWNLOADING, remoteVer);
 
             File partFile = new File(getOtaDir(appContext), "update.apk.part");
@@ -407,7 +471,7 @@ public final class AppUpdateManager {
                 partFile.delete();
             }
 
-            downloadBinaryFollowRedirects(downloadUrl, partFile, expectedSize);
+            downloadBinaryFollowRedirects(downloadUrl, partFile, expectedSize, remoteVer);
 
             if (!isValidApkArchive(partFile)) {
                 partFile.delete();
@@ -424,15 +488,20 @@ public final class AppUpdateManager {
 
             writeStagedMeta(stagedMeta, remoteVer, stagedApk.length());
             Log.i(TAG, "Update v" + remoteVer + " downloaded (" + stagedApk.length() + " bytes)");
+            this.lastCheckResult = "ready";
             updateState(STATE_READY, remoteVer);
             if (manual) {
-                showToast("Update v" + remoteVer + " downloaded — tap Restart to Update");
+                showToast(tr("Actualización v" + remoteVer + " descargada — toca para instalar",
+                        "Update v" + remoteVer + " downloaded — tap to install"));
             }
         } catch (Throwable t) {
             Log.w(TAG, "Update check failed: " + t.getMessage());
+            this.lastCheckResult = "error";
+            this.lastError = t.getMessage();
             updateState(STATE_IDLE, null);
             if (manual) {
-                showToast("Update check failed: " + t.getMessage());
+                showToast(tr("Error al buscar actualizaciones: " + t.getMessage(),
+                        "Update check failed: " + t.getMessage()));
             }
         }
     }
@@ -479,6 +548,9 @@ public final class AppUpdateManager {
                     currentUrl = new URL(new URL(currentUrl), loc).toString();
                     continue;
                 }
+                if (code == 404) {
+                    return null;
+                }
                 if (code != 200) {
                     throw new IllegalStateException("GitHub API HTTP " + code);
                 }
@@ -498,7 +570,8 @@ public final class AppUpdateManager {
         throw new IllegalStateException("Too many redirects");
     }
 
-    private static void downloadBinaryFollowRedirects(String urlStr, File destFile, long expectedSize) throws Exception {
+    private void downloadBinaryFollowRedirects(String urlStr, File destFile,
+                                               long expectedSize, String remoteVer) throws Exception {
         String currentUrl = urlStr;
         for (int hop = 0; hop < 6; hop++) {
             HttpURLConnection conn = (HttpURLConnection) new URL(currentUrl).openConnection();
@@ -521,7 +594,10 @@ public final class AppUpdateManager {
                 if (code != 200) {
                     throw new IllegalStateException("Download HTTP " + code);
                 }
+                long contentLen = conn.getContentLengthLong();
+                long denom = expectedSize > 0L ? expectedSize : contentLen;
                 long total = 0L;
+                long lastEmitMs = 0L;
                 try (InputStream in = new BufferedInputStream(conn.getInputStream(), 65536);
                      OutputStream out = new BufferedOutputStream(new FileOutputStream(destFile), 65536)) {
                     byte[] buf = new byte[65536];
@@ -529,6 +605,15 @@ public final class AppUpdateManager {
                     while ((n = in.read(buf)) != -1) {
                         out.write(buf, 0, n);
                         total += n;
+                        if (denom > 0L) {
+                            int pct = (int) Math.min(100L, (total * 100L) / denom);
+                            long now = System.currentTimeMillis();
+                            if (pct != this.downloadProgress && (now - lastEmitMs >= 250L || pct == 100)) {
+                                this.downloadProgress = pct;
+                                lastEmitMs = now;
+                                emitStateToWebView();
+                            }
+                        }
                     }
                     out.flush();
                 }
@@ -578,7 +663,7 @@ public final class AppUpdateManager {
                 return;
             }
             mainHandler.post(() -> launchSystemPackageInstaller(MainActivity.activeActivity));
-        }, "AgyApkInstaller");
+        }, "OcApkInstaller");
         installerThread.setDaemon(true);
         installerThread.start();
     }
@@ -600,9 +685,9 @@ public final class AppUpdateManager {
             }
 
             String pkg = appContext.getPackageName();
-            String remoteTmp = "/data/local/tmp/agy_ota_" + pkg.replace('.', '_') + ".apk";
+            String remoteTmp = "/data/local/tmp/oc_ota_" + pkg.replace('.', '_') + ".apk";
 
-            showToast("Installing update via Shizuku…");
+            showToast(tr("Instalando actualización vía Shizuku…", "Installing update via Shizuku…"));
 
             ProcessBuilder pb = new ProcessBuilder(
                     rish.getAbsolutePath(),
@@ -675,7 +760,8 @@ public final class AppUpdateManager {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                     && !appContext.getPackageManager().canRequestPackageInstalls()) {
                 pendingInstallAfterPermission = true;
-                showToast("Allow 'Install unknown apps' to apply update");
+                showToast(tr("Permite 'Instalar apps desconocidas' para actualizar",
+                        "Allow 'Install unknown apps' to apply update"));
                 Intent permIntent = new Intent(
                         Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                         Uri.parse("package:" + appContext.getPackageName()));
@@ -695,7 +781,8 @@ public final class AppUpdateManager {
             host.startActivity(installIntent);
         } catch (Throwable t) {
             Log.e(TAG, "Failed to launch system package installer: " + t.getMessage());
-            showToast("Cannot launch installer: " + t.getMessage());
+            showToast(tr("No se pudo abrir el instalador: " + t.getMessage(),
+                    "Cannot launch installer: " + t.getMessage()));
         }
     }
 
@@ -754,8 +841,10 @@ public final class AppUpdateManager {
                     : PendingIntent.FLAG_UPDATE_CURRENT;
             PendingIntent pi = PendingIntent.getActivity(appContext, UPDATE_NOTIFICATION_ID, tapIntent, piFlags);
 
-            String title = "OpenCode v" + version + " ready to install";
-            String body = "Update downloaded and verified. Tap to install without losing data.";
+            String title = tr("OpenCode v" + version + " listo para instalar",
+                    "OpenCode v" + version + " ready to install");
+            String body = tr("Actualización descargada y verificada. Toca para instalar sin perder tus datos.",
+                    "Update downloaded and verified. Tap to install without losing data.");
             Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                     ? new Notification.Builder(appContext, UPDATES_CHANNEL_ID)
                     : new Notification.Builder(appContext);

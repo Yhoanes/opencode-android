@@ -3,7 +3,7 @@ PART I: OPEN-SOURCE NON-COMMERCIAL & MANDATORY ATTRIBUTION LICENSE (BY-NC)
 ================================================================================
 
 Copyright (c) 2026 Yhoanes (https://github.com/Yhoanes/opencode-android)
-All rights reserved over OpenCode for Android (v2.3.0-r1 and subsequent
+All rights reserved over OpenCode for Android (v2.3.0-r2 and subsequent
 releases), including the native Android Bionic host architecture, pairing and
 session authentication bridge, native Rust oc-box multicall runtime, native
 Extensions/MCP hot-reload integration, Gradle-free build pipeline,

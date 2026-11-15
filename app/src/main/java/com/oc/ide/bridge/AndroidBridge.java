@@ -268,4 +268,50 @@ public final class AndroidBridge {
         } catch (Throwable ignored) {
         }
     }
+
+    @JavascriptInterface
+    public String getExternalStoragePath() {
+        try {
+            java.io.File ext = android.os.Environment.getExternalStorageDirectory();
+            if (ext != null) {
+                return ext.getAbsolutePath();
+            }
+        } catch (Throwable ignored) {
+        }
+        return "/storage/emulated/0";
+    }
+
+    @JavascriptInterface
+    public void pickProjectDirectory(final String callbackId) {
+        MainActivity act = MainActivity.activeActivity;
+        if (act != null) {
+            act.pickProjectDirectoryFromJs(callbackId);
+        }
+    }
+
+    @JavascriptInterface
+    public String createProjectDirectory(String parentPath, String folderName) {
+        try {
+            if (folderName == null || folderName.trim().isEmpty()) {
+                return "{\"ok\":false,\"error\":\"Empty folder name\"}";
+            }
+            String cleanName = folderName.trim().replace('\\', '/');
+            if (cleanName.contains("..") || cleanName.startsWith("/")) {
+                return "{\"ok\":false,\"error\":\"Invalid folder name\"}";
+            }
+            String base = (parentPath == null || parentPath.trim().isEmpty())
+                    ? getExternalStoragePath() + "/Documents"
+                    : parentPath.trim();
+            java.io.File target = new java.io.File(base, cleanName);
+            if (!target.exists() && !target.mkdirs()) {
+                return "{\"ok\":false,\"error\":\"Cannot create directory: " + target.getAbsolutePath() + "\"}";
+            }
+            org.json.JSONObject out = new org.json.JSONObject();
+            out.put("ok", true);
+            out.put("path", target.getAbsolutePath());
+            return out.toString();
+        } catch (Throwable t) {
+            return "{\"ok\":false,\"error\":\"" + String.valueOf(t.getMessage()).replace("\"", "'") + "\"}";
+        }
+    }
 }

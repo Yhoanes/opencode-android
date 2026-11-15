@@ -72,7 +72,7 @@ public final class CoreReadyProbe {
                 workspaceDir.mkdirs();
             }
             String q = URLEncoder.encode(workspaceDir.getAbsolutePath(), "UTF-8");
-            URL url = new URL("http://127.0.0.1:" + port + "/api/path?directory=" + q);
+            URL url = new URL("http://127.0.0.1:" + port + "/api/project?directory=" + q);
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(1200);

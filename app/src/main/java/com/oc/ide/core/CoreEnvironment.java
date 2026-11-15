@@ -40,6 +40,10 @@ public final class CoreEnvironment {
         env.put("OPENCODE_CONFIG_DIR", ocConfig.getAbsolutePath());
         env.put("OPENCODE_SERVER_USERNAME", "opencode");
         env.put("OPENCODE_SERVER_PASSWORD", runtime.getCsrfToken());
+        env.put("OPENCODE_FILEWATCHER_DISABLE", "1");
+        env.put("OPENCODE_DISABLE_FILEWATCHER", "1");
+        env.put("OPENCODE_DISABLE_AUTOUPDATE", "1");
+        env.put("GHIDRA_HEADLESS_MAXMEM", "768M");
         env.put("ANTIGRAVITY_APP_DATA_DIR", ocData.getAbsolutePath());
 
         env.put("SSL_CERT_FILE", cert.getAbsolutePath());
