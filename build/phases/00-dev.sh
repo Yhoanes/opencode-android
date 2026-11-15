@@ -18,7 +18,7 @@ export OUT_APK OUT_APK_ALIAS
 [ -d "$RES_DIR" ] || die "res dir not found: $RES_DIR"
 
 mkdir -p "$GEN_DIR" "$BUILD_DIR/res"
-python3 "$GEN_ANDROID_CONFIG" "$CONFIG_APP_ENV" "$GEN_DIR" \
+DEV_MODE="$DEV_MODE" python3 "$GEN_ANDROID_CONFIG" "$CONFIG_APP_ENV" "$GEN_DIR" \
     || die "gen_android_config.py failed"
 
 PKG_REL_DIR="$(printf '%s' "$PKG" | tr '.' '/')"

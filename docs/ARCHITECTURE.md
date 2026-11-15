@@ -1,4 +1,4 @@
-# OpenCode for Android — Architecture Specification (`v2.3.0-r2`)
+# OpenCode for Android — Architecture Specification (`v2.3.0-r3`)
 
 ## 1. Execution Model: Pure Bionic (`Zero PRoot`, `Zero Glibc`)
 
@@ -6,7 +6,7 @@
 flowchart LR
     UI["Android WebView<br/>Pure SolidJS v2 UI (Extensions + About)"]
     J["Java Host (com.oc.ide)<br/>CoreServerService + EngineBridge"]
-    OC["Pure Bionic ARM64 Engine<br/>files/runtime/bin/opencode<br/>(127.0.0.1:45167)"]
+    OC["Pure Bionic ARM64 Engine<br/>files/runtime/bin/opencode + opencode-pty<br/>(127.0.0.1:45167)"]
     USR["Bionic Linux Userspace<br/>files/usr/bin (pkg, bash, rg, oc-box, git)"]
     MCP["Native ARM64 MCP Servers<br/>Craft Anything, GitHub, ADB Bridge, Studio"]
 

@@ -18,6 +18,7 @@ __pycache__/
 *$py.class
 .pytest_cache/
 env/rust/agy-box/target/
+env/rust/opencode-pty/target/
 target/
 
 # Logs, temporary & signature files
@@ -36,8 +37,10 @@ Thumbs.db
 *.keystore
 !tools/debug.keystore
 *.jks
+*.p12
 *.key
 *-token
+keystore.env
 .env.local
 
 # Scratch / local workspaces

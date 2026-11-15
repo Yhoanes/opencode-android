@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.Signature;
+import android.content.pm.SigningInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -39,8 +41,12 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.lang.ref.WeakReference;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Native in-app auto-updater for OpenCode for Android.
@@ -81,7 +87,7 @@ public final class AppUpdateManager {
     private volatile long lastCheckStartedMs = 0L;
     private volatile boolean initialAutoCheckScheduled = false;
     private volatile boolean pendingInstallAfterPermission = false;
-    private volatile WebView activeWebView;
+    private volatile WeakReference<WebView> activeWebViewRef = new WeakReference<>(null);
 
     private static boolean isSpanishLocale() {
         try {
@@ -129,10 +135,17 @@ public final class AppUpdateManager {
     }
 
     public void attachWebView(WebView webView) {
-        this.activeWebView = webView;
+        this.activeWebViewRef = new WeakReference<>(webView);
         if (!initialAutoCheckScheduled) {
             initialAutoCheckScheduled = true;
             mainHandler.postDelayed(() -> checkForUpdates(false), 10_000L);
+        }
+    }
+
+    public void detachWebView(WebView webView) {
+        WebView cur = activeWebViewRef.get();
+        if (webView == null || cur == webView) {
+            activeWebViewRef = new WeakReference<>(null);
         }
     }
 
@@ -214,11 +227,11 @@ public final class AppUpdateManager {
     private void emitStateToWebView() {
         final String json = getStateJson();
         mainHandler.post(() -> {
-            WebView wv = activeWebView;
+            WebView wv = activeWebViewRef.get();
             if (wv == null && MainActivity.activeActivity != null) {
                 wv = MainActivity.activeActivity.getWebView();
                 if (wv != null) {
-                    activeWebView = wv;
+                    activeWebViewRef = new WeakReference<>(wv);
                 }
             }
             if (wv != null) {
@@ -528,10 +541,34 @@ public final class AppUpdateManager {
         return fallbackApk;
     }
 
+    private static boolean isAllowedOtaUrl(URL url) {
+        if (url == null || !"https".equalsIgnoreCase(url.getProtocol())) {
+            return false;
+        }
+        String host = url.getHost();
+        if (host == null) {
+            return false;
+        }
+        String lower = host.trim().toLowerCase(Locale.ROOT);
+        String path = url.getPath() != null ? url.getPath() : "";
+        if ("api.github.com".equals(lower)) {
+            return path.startsWith("/repos/Yhoanes/opencode-android/");
+        }
+        if ("github.com".equals(lower)) {
+            return path.startsWith("/Yhoanes/opencode-android/");
+        }
+        return "objects.githubusercontent.com".equals(lower)
+                || "release-assets.githubusercontent.com".equals(lower);
+    }
+
     private static JSONObject fetchJsonFollowRedirects(String urlStr) throws Exception {
         String currentUrl = urlStr;
         for (int hop = 0; hop < 6; hop++) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(currentUrl).openConnection();
+            URL u = new URL(currentUrl);
+            if (!isAllowedOtaUrl(u)) {
+                throw new SecurityException("Blocked OTA metadata URL: " + currentUrl);
+            }
+            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
             conn.setInstanceFollowRedirects(false);
             conn.setConnectTimeout(15_000);
             conn.setReadTimeout(20_000);
@@ -545,7 +582,11 @@ public final class AppUpdateManager {
                     if (loc == null || loc.isEmpty()) {
                         throw new IllegalStateException("Redirect missing Location");
                     }
-                    currentUrl = new URL(new URL(currentUrl), loc).toString();
+                    URL nextUrl = new URL(u, loc);
+                    if (!isAllowedOtaUrl(nextUrl)) {
+                        throw new SecurityException("Blocked OTA redirect host: " + nextUrl.getHost());
+                    }
+                    currentUrl = nextUrl.toString();
                     continue;
                 }
                 if (code == 404) {
@@ -574,7 +615,11 @@ public final class AppUpdateManager {
                                                long expectedSize, String remoteVer) throws Exception {
         String currentUrl = urlStr;
         for (int hop = 0; hop < 6; hop++) {
-            HttpURLConnection conn = (HttpURLConnection) new URL(currentUrl).openConnection();
+            URL u = new URL(currentUrl);
+            if (!isAllowedOtaUrl(u)) {
+                throw new SecurityException("Blocked OTA download URL: " + currentUrl);
+            }
+            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
             conn.setInstanceFollowRedirects(false);
             conn.setConnectTimeout(20_000);
             conn.setReadTimeout(60_000);
@@ -588,7 +633,11 @@ public final class AppUpdateManager {
                     if (loc == null || loc.isEmpty()) {
                         throw new IllegalStateException("Asset redirect missing Location");
                     }
-                    currentUrl = new URL(new URL(currentUrl), loc).toString();
+                    URL nextUrl = new URL(u, loc);
+                    if (!isAllowedOtaUrl(nextUrl)) {
+                        throw new SecurityException("Blocked OTA asset redirect host: " + nextUrl.getHost());
+                    }
+                    currentUrl = nextUrl.toString();
                     continue;
                 }
                 if (code != 200) {
@@ -629,6 +678,40 @@ public final class AppUpdateManager {
         throw new IllegalStateException("Too many download redirects");
     }
 
+    private static Set<String> extractSignerSha256Digests(PackageInfo pi) {
+        Set<String> digests = new HashSet<>();
+        if (pi == null) {
+            return digests;
+        }
+        try {
+            Signature[] sigs = null;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                SigningInfo si = pi.signingInfo;
+                if (si != null) {
+                    sigs = si.hasMultipleSigners()
+                            ? si.getApkContentsSigners()
+                            : si.getSigningCertificateHistory();
+                }
+            }
+            if ((sigs == null || sigs.length == 0) && pi.signatures != null) {
+                sigs = pi.signatures;
+            }
+            if (sigs != null) {
+                for (Signature s : sigs) {
+                    if (s == null) continue;
+                    byte[] hash = MessageDigest.getInstance("SHA-256").digest(s.toByteArray());
+                    StringBuilder hex = new StringBuilder(hash.length * 2);
+                    for (byte b : hash) {
+                        hex.append(String.format("%02x", b & 0xff));
+                    }
+                    digests.add(hex.toString());
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return digests;
+    }
+
     private boolean isValidApkArchive(File apkFile) {
         if (apkFile == null || !apkFile.isFile() || apkFile.length() < 1024L) {
             return false;
@@ -643,10 +726,30 @@ public final class AppUpdateManager {
             return false;
         }
         try {
-            PackageInfo pi = appContext.getPackageManager()
-                    .getPackageArchiveInfo(apkFile.getAbsolutePath(), 0);
-            return pi != null && appContext.getPackageName().equals(pi.packageName);
+            PackageManager pm = appContext.getPackageManager();
+            int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                    ? PackageManager.GET_SIGNING_CERTIFICATES
+                    : PackageManager.GET_SIGNATURES;
+            PackageInfo archiveInfo = pm.getPackageArchiveInfo(apkFile.getAbsolutePath(), flags);
+            if (archiveInfo == null || !appContext.getPackageName().equals(archiveInfo.packageName)) {
+                return false;
+            }
+            PackageInfo installedInfo = pm.getPackageInfo(appContext.getPackageName(), flags);
+            Set<String> installedCerts = extractSignerSha256Digests(installedInfo);
+            Set<String> archiveCerts = extractSignerSha256Digests(archiveInfo);
+            if (installedCerts.isEmpty() || archiveCerts.isEmpty()) {
+                Log.w(TAG, "OTA APK rejected: missing signing certificate metadata");
+                return false;
+            }
+            for (String d : archiveCerts) {
+                if (installedCerts.contains(d)) {
+                    return true;
+                }
+            }
+            Log.e(TAG, "OTA APK rejected: signing certificate SHA-256 mismatch against installed app");
+            return false;
         } catch (Throwable t) {
+            Log.w(TAG, "OTA APK verification failed: " + t.getMessage());
             return false;
         }
     }

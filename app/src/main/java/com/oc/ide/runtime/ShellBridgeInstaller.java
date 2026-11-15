@@ -154,7 +154,7 @@ public final class ShellBridgeInstaller {
                 + "  /system/bin/cmd camera set-torch-mode 0 \"$STATE\" >/dev/null 2>&1 || true\n"
                 + "fi\n"
                 + "if [ -x /system/bin/am ]; then\n"
-                + "  /system/bin/am broadcast -a com.oc.ide.ACTION_TORCH -p " + pkg + " --ez enabled \"$ENABLE\" --es state \"$STATE\" >/dev/null 2>&1 || true\n"
+                + "  /system/bin/am broadcast -a " + pkg + ".ACTION_TORCH -n " + pkg + "/com.oc.ide.runtime.TorchReceiver --ez enabled \"$ENABLE\" --es state \"$STATE\" >/dev/null 2>&1 || true\n"
                 + "fi\n"
                 + "echo \"Flashlight set to $STATE\"\n"
                 + "exit 0\n";

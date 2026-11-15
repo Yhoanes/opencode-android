@@ -7,6 +7,7 @@ import com.oc.ide.BuildConfig;
 /** App-level constants sourced from the generated BuildConfig. */
 public final class RuntimeConfig {
 
+    public static final boolean DEBUG = BuildConfig.DEBUG;
     public static final int DEFAULT_HTTPS_PORT = BuildConfig.PORT;
     public static final String CORE_VERSION = BuildConfig.CORE_VERSION;
     public static final int MIN_API = BuildConfig.MIN_API;

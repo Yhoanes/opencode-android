@@ -53,12 +53,12 @@ public final class LocalAssetServer {
     }
 
     public WebResourceResponse intercept(Context context, Uri uri, String method,
-                                         int enginePort, boolean isForMainFrame) {
+                                         int enginePort, boolean isForMainFrame,
+                                         String bridgeAuthToken) {
         if (uri == null || !"GET".equalsIgnoreCase(method)) {
             return null;
         }
-        String host = uri.getHost();
-        if (!LoopbackHost.isLoopback(host) || uri.getPort() != enginePort) {
+        if (!LoopbackHost.isCoreOrigin(uri, enginePort)) {
             return null;
         }
         String path = uri.getPath();
@@ -84,7 +84,7 @@ public final class LocalAssetServer {
                     headers, new ByteArrayInputStream("/* native host */".getBytes(StandardCharsets.UTF_8)));
         }
 
-        // 1b. Serve custom Android bridge assets under /__oc_*
+        // 1b. Serve custom Android bridge assets under /__oc_* (same-origin only, no wildcard CORS)
         if (path.startsWith("/__oc_")) {
             String relPath = path.substring(1);
             File webDir = new File(context.getFilesDir(), "web");
@@ -99,8 +99,8 @@ public final class LocalAssetServer {
                     String mime = MimeTypes.getMimeType(target.getName());
                     String encoding = MimeTypes.isTextMime(mime) ? "UTF-8" : null;
                     Map<String, String> headers = new HashMap<>();
-                    headers.put("Access-Control-Allow-Origin", "*");
                     headers.put("Cache-Control", "no-store");
+                    headers.put("X-Content-Type-Options", "nosniff");
                     InputStream bis = new BufferedInputStream(new FileInputStream(target), 32 * 1024);
                     return new WebResourceResponse(mime, encoding, 200, "OK", headers, bis);
                 }
@@ -143,9 +143,9 @@ public final class LocalAssetServer {
             return null;
         }
 
-        // 4. Intercept main-frame SPA document to inject __oc_android_boot.js cleanly
+        // 4. Intercept main-frame SPA document to inject __oc_android_boot.js + capability token cleanly
         if (isForMainFrame) {
-            return fetchAndInjectIndexHtml(uri, enginePort);
+            return fetchAndInjectIndexHtml(uri, enginePort, bridgeAuthToken);
         }
 
         return null;
@@ -359,7 +359,7 @@ public final class LocalAssetServer {
         return conn;
     }
 
-    private WebResourceResponse fetchAndInjectIndexHtml(Uri uri, int port) {
+    private WebResourceResponse fetchAndInjectIndexHtml(Uri uri, int port, String bridgeAuthToken) {
         HttpURLConnection conn = null;
         try {
             conn = openAuthenticatedLoopbackGet(uri.toString(), port, "text/html,application/xhtml+xml");
@@ -372,7 +372,11 @@ public final class LocalAssetServer {
             try (InputStream in = conn.getInputStream()) {
                 html = IoUtil.readAll(in, "UTF-8");
             }
-            String bootTag = "\n    <script>window.__OC_HOST_THEME__=\"" + hostThemeHint + "\";</script>"
+            String tokenInit = (bridgeAuthToken != null && !bridgeAuthToken.isEmpty())
+                    ? "window.__OC_BRIDGE_TOKEN__=" + JSONObject.quote(bridgeAuthToken) + ";"
+                    : "";
+            String bootTag = "\n    <script>window.__OC_HOST_THEME__="
+                    + JSONObject.quote(hostThemeHint) + ";" + tokenInit + "</script>"
                     + "\n    <script src=\"/__oc_android_boot.js\"></script>\n";
             int headIdx = html.indexOf("<head>");
             if (headIdx >= 0) {

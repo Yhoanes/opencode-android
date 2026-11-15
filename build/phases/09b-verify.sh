@@ -15,6 +15,7 @@ required = [
     "classes.dex",
     "resources.arsc",
     "assets/runtime/bin/opencode",
+    "assets/runtime/bin/opencode-pty",
     "assets/runtime/bin/rish",
     "assets/runtime/bin/rish_shizuku.dex",
     "assets/runtime/bin/xdg-open",
@@ -69,6 +70,15 @@ with zipfile.ZipFile(apk, "r") as z:
     if actual_sha != expected_sha:
         sys.exit("[verify] FAIL bin/opencode sha256 mismatch: %s != %s" % (actual_sha, expected_sha))
     print("[verify] Pure Bionic ARM64 bin/opencode ok (%d bytes, sha256=%s...)" % (total, actual_sha[:16]))
+
+    # 3. Verify bundled native Bionic ARM64 opencode-pty Protocol v8 daemon
+    pty_bytes = z.read("assets/runtime/bin/opencode-pty")
+    pty_sha = hashlib.sha256(pty_bytes).hexdigest()
+    if pty_bytes[:4] != b"\x7fELF" or pty_bytes[4] != 2 or pty_bytes[18] != 0xb7:
+        sys.exit("[verify] FAIL bin/opencode-pty is not ELF64 AArch64")
+    if pty_sha != manifest["files"].get("bin/opencode-pty"):
+        sys.exit("[verify] FAIL bin/opencode-pty sha256 mismatch in manifest.json")
+    print("[verify] Pure Bionic ARM64 bin/opencode-pty ok (%d bytes, sha256=%s...)" % (len(pty_bytes), pty_sha[:16]))
 PY
 
 # Clean intermediate build scratch while preserving build/{lib,phases,tools}

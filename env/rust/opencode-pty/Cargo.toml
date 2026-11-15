@@ -1,0 +1,20 @@
+[package]
+name = "opencode-pty"
+version = "2.3.0"
+edition = "2021"
+authors = ["Yhoanes <https://github.com/Yhoanes>"]
+description = "Native Android Bionic ARM64 persistent PTY & pipe daemon (Protocol v8) for OpenCode for Android"
+
+[dependencies]
+base64 = "0.22"
+hex = "0.4"
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 2
+panic = "abort"
+strip = "symbols"

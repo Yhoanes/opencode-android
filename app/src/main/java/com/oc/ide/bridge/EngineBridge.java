@@ -45,6 +45,10 @@ public final class EngineBridge {
     private static final String TAG = "EngineBridge";
     private static final String ANDROID_PLUGINS_REPO_BASE =
             "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/";
+    private static final long MAX_ZIP_DOWNLOAD_BYTES = 256L * 1024L * 1024L;
+    private static final long MAX_EXTRACTED_TOTAL_BYTES = 600L * 1024L * 1024L;
+    private static final int MAX_ZIP_ENTRIES = 5000;
+    private static final int MAX_HOOK_OUTPUT_BYTES = 32768;
 
     private final RuntimeManager runtime;
 
@@ -83,10 +87,94 @@ public final class EngineBridge {
     }
 
     private static String resolvePluginArchiveUrl(String safeName, String archiveUrl) {
-        if (archiveUrl != null && (archiveUrl.startsWith("https://") || archiveUrl.startsWith("http://"))) {
-            return archiveUrl;
+        if (archiveUrl != null && !archiveUrl.trim().isEmpty()) {
+            String trimmed = archiveUrl.trim();
+            try {
+                URL candidate = new URL(trimmed);
+                if (!isAllowedPluginArchiveUrl(candidate)) {
+                    throw new SecurityException("Untrusted plugin archive URL: " + trimmed);
+                }
+                return trimmed;
+            } catch (SecurityException se) {
+                throw se;
+            } catch (Exception e) {
+                throw new SecurityException("Invalid plugin archive URL: " + trimmed);
+            }
         }
         return ANDROID_PLUGINS_REPO_BASE + safeName + "/" + safeName + ".zip";
+    }
+
+    private static boolean isAllowedPluginArchiveUrl(URL url) {
+        if (url == null || !"https".equalsIgnoreCase(url.getProtocol())) {
+            return false;
+        }
+        String host = url.getHost();
+        if (host == null) {
+            return false;
+        }
+        String lowerHost = host.trim().toLowerCase(java.util.Locale.ROOT);
+        String path = url.getPath() != null ? url.getPath() : "";
+        if ("raw.githubusercontent.com".equals(lowerHost)
+                || "github.com".equals(lowerHost)
+                || "codeload.githubusercontent.com".equals(lowerHost)) {
+            return path.startsWith("/Yhoanes/");
+        }
+        return "objects.githubusercontent.com".equals(lowerHost)
+                || "release-assets.githubusercontent.com".equals(lowerHost);
+    }
+
+    private static void downloadPluginZipVerified(String initialUrl, File destZip) throws Exception {
+        String current = initialUrl;
+        for (int hop = 0; hop < 6; hop++) {
+            URL u = new URL(current);
+            if (!isAllowedPluginArchiveUrl(u)) {
+                throw new SecurityException("Blocked redirect or untrusted host: " + current);
+            }
+            HttpURLConnection conn = (HttpURLConnection) u.openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(20000);
+            conn.setReadTimeout(60000);
+            conn.setRequestProperty("User-Agent", "OpenCode-Android/" + RuntimeManager.CORE_VERSION);
+            try {
+                int code = conn.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String loc = conn.getHeaderField("Location");
+                    if (loc == null || loc.isEmpty()) {
+                        throw new IllegalStateException("Redirect missing Location header");
+                    }
+                    URL nextUrl = new URL(u, loc);
+                    if (!isAllowedPluginArchiveUrl(nextUrl)) {
+                        throw new SecurityException("Blocked redirect to untrusted host: " + nextUrl.getHost());
+                    }
+                    current = nextUrl.toString();
+                    continue;
+                }
+                if (code < 200 || code >= 300) {
+                    throw new IllegalStateException("HTTP " + code + " downloading plugin archive");
+                }
+                long declaredLen = conn.getContentLengthLong();
+                if (declaredLen > MAX_ZIP_DOWNLOAD_BYTES) {
+                    throw new IllegalStateException("Plugin archive exceeds 256 MiB safety limit");
+                }
+                long total = 0L;
+                try (InputStream in = conn.getInputStream();
+                     FileOutputStream out = new FileOutputStream(destZip)) {
+                    byte[] buf = new byte[16384];
+                    int n;
+                    while ((n = in.read(buf)) > 0) {
+                        total += n;
+                        if (total > MAX_ZIP_DOWNLOAD_BYTES) {
+                            throw new IllegalStateException("Plugin archive exceeded 256 MiB limit during download");
+                        }
+                        out.write(buf, 0, n);
+                    }
+                }
+                return;
+            } finally {
+                conn.disconnect();
+            }
+        }
+        throw new IllegalStateException("Too many redirects downloading plugin archive");
     }
 
     /** Returns bundled __oc_plugins_catalog.json directly from filesDir/web for 0-ms UI rendering. */
@@ -117,7 +205,7 @@ public final class EngineBridge {
             File[] dirs = getPluginHubDir().listFiles();
             if (dirs != null) {
                 for (File d : dirs) {
-                    if (!d.isDirectory()) continue;
+                    if (!d.isDirectory() || d.getName().startsWith(".")) continue;
                     String name = d.getName();
                     JSONObject meta = installed.optJSONObject(name);
                     JSONObject item = new JSONObject();
@@ -146,62 +234,58 @@ public final class EngineBridge {
     public String installMarketplacePlugin(String pluginName, String archiveUrl,
                                            String catalogId, String marketplace, String version) {
         JSONObject res = new JSONObject();
-        try {
-            String safeName = sanitizeName(pluginName);
-            if (safeName.isEmpty()) {
+        File hubDir = getPluginHubDir();
+        String safeName = sanitizeName(pluginName);
+        if (safeName.isEmpty() || ".".equals(safeName) || "..".equals(safeName)) {
+            try {
                 res.put("ok", false);
                 res.put("error", "Invalid plugin name");
-                return res.toString();
+            } catch (Exception ignored) {
             }
+            return res.toString();
+        }
+        File targetDir = new File(hubDir, safeName);
+        File stagingDir = new File(hubDir, ".staging-" + safeName + "-" + System.currentTimeMillis());
+        File backupDir = new File(hubDir, ".backup-" + safeName);
+        File tmpZip = new File(runtime.appContext().getCacheDir(),
+                safeName + "-" + System.currentTimeMillis() + ".ocplugin.zip");
+        boolean swappedTarget = false;
+        boolean hadPreviousInstall = targetDir.exists();
+
+        try {
             String url = resolvePluginArchiveUrl(safeName, archiveUrl);
-            File targetDir = new File(getPluginHubDir(), safeName);
-            File tmpZip = new File(runtime.appContext().getCacheDir(), safeName + ".ocplugin.zip");
+            downloadPluginZipVerified(url, tmpZip);
 
-            HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.setConnectTimeout(20000);
-            conn.setReadTimeout(60000);
-            conn.setRequestProperty("User-Agent", "OpenCode-Android/" + RuntimeManager.CORE_VERSION);
-            int code = conn.getResponseCode();
-            if (code < 200 || code >= 300) {
-                res.put("ok", false);
-                res.put("error", "HTTP " + code + " downloading " + url);
-                return res.toString();
-            }
-            try (InputStream in = conn.getInputStream();
-                 FileOutputStream out = new FileOutputStream(tmpZip)) {
-                byte[] buf = new byte[16384];
-                int n;
-                while ((n = in.read(buf)) > 0) {
-                    out.write(buf, 0, n);
-                }
-            } finally {
-                conn.disconnect();
+            deleteRecursive(stagingDir);
+            if (!stagingDir.mkdirs() && !stagingDir.isDirectory()) {
+                throw new IllegalStateException("Cannot create staging directory");
             }
 
-            deleteRecursive(targetDir);
-            targetDir.mkdirs();
-
-            String canonicalTarget = targetDir.getCanonicalPath();
+            String canonicalStaging = stagingDir.getCanonicalPath();
+            int entryCount = 0;
+            long totalExtracted = 0L;
             try (ZipInputStream zis = new ZipInputStream(new FileInputStream(tmpZip))) {
                 ZipEntry entry;
                 byte[] buf = new byte[16384];
                 while ((entry = zis.getNextEntry()) != null) {
-                    String entryName = entry.getName();
-                    if (entryName.startsWith("/")) {
+                    entryCount++;
+                    if (entryCount > MAX_ZIP_ENTRIES) {
+                        throw new IllegalStateException("Plugin archive exceeds maximum entry limit (" + MAX_ZIP_ENTRIES + ")");
+                    }
+                    String entryName = entry.getName().replace('\\', '/');
+                    while (entryName.startsWith("/")) {
                         entryName = entryName.substring(1);
                     }
                     if (entryName.startsWith(safeName + "/")) {
                         entryName = entryName.substring(safeName.length() + 1);
                     }
-                    if (entryName.isEmpty()) {
+                    if (entryName.isEmpty() || entryName.contains("..")) {
                         zis.closeEntry();
                         continue;
                     }
-                    File outFile = new File(targetDir, entryName);
-                    if (!outFile.getCanonicalPath().startsWith(canonicalTarget + File.separator)) {
-                        zis.closeEntry();
-                        continue;
+                    File outFile = new File(stagingDir, entryName);
+                    if (!outFile.getCanonicalPath().startsWith(canonicalStaging + File.separator)) {
+                        throw new SecurityException("Blocked Zip-Slip entry: " + entry.getName());
                     }
                     if (entry.isDirectory()) {
                         outFile.mkdirs();
@@ -213,6 +297,10 @@ public final class EngineBridge {
                         try (FileOutputStream fos = new FileOutputStream(outFile)) {
                             int n;
                             while ((n = zis.read(buf)) > 0) {
+                                totalExtracted += n;
+                                if (totalExtracted > MAX_EXTRACTED_TOTAL_BYTES) {
+                                    throw new IllegalStateException("Extracted plugin exceeds 600 MiB quota");
+                                }
                                 fos.write(buf, 0, n);
                             }
                         }
@@ -223,11 +311,26 @@ public final class EngineBridge {
                 tmpZip.delete();
             }
 
-            // Also mirror/symlink under ~/.gemini/config/plugins/<safeName> for script compatibility
+            deleteRecursive(backupDir);
+            if (hadPreviousInstall) {
+                if (!targetDir.renameTo(backupDir)) {
+                    copyRecursive(targetDir, backupDir);
+                    deleteRecursive(targetDir);
+                }
+            }
+            if (!stagingDir.renameTo(targetDir)) {
+                copyRecursive(stagingDir, targetDir);
+                deleteRecursive(stagingDir);
+            }
+            swappedTarget = true;
+
+            // Mirror/symlink under ~/.gemini/config/plugins/<safeName> for script compatibility
             mirrorCompatPluginPath(safeName, targetDir);
 
             JSONObject hookRes = runPostInstallAndWireOpenCode(
                     safeName, targetDir, version != null && !version.isEmpty() ? version : "1.0.0");
+
+            deleteRecursive(backupDir);
 
             res.put("ok", true);
             res.put("path", targetDir.getAbsolutePath());
@@ -237,6 +340,23 @@ public final class EngineBridge {
             res.put("reloaded", reloadEngineConfigBool());
             return res.toString();
         } catch (Exception e) {
+            tmpZip.delete();
+            deleteRecursive(stagingDir);
+            if (swappedTarget) {
+                deleteRecursive(targetDir);
+                if (hadPreviousInstall && backupDir.exists()) {
+                    if (!backupDir.renameTo(targetDir)) {
+                        try {
+                            copyRecursive(backupDir, targetDir);
+                        } catch (Exception ignored) {
+                        }
+                        deleteRecursive(backupDir);
+                    }
+                    mirrorCompatPluginPath(safeName, targetDir);
+                } else {
+                    deleteRecursive(new File(new File(runtime.getGeminiDir(), "config/plugins"), safeName));
+                }
+            }
             try {
                 res.put("ok", false);
                 res.put("error", String.valueOf(e.getMessage()));
@@ -494,15 +614,59 @@ public final class EngineBridge {
                 env.put("CURL_CA_BUNDLE", certFile.getAbsolutePath());
             }
             Process p = pb.start();
-            try (InputStream pis = p.getInputStream()) {
-                IoUtil.readAll(pis, "UTF-8");
+            try {
+                p.getOutputStream().close();
             } catch (Exception ignored) {
             }
-            if (p.waitFor(120, TimeUnit.SECONDS)) {
+            final InputStream pis = p.getInputStream();
+            final java.io.ByteArrayOutputStream tailBuf = new java.io.ByteArrayOutputStream(4096);
+            Thread drainer = new Thread(() -> {
+                byte[] chunk = new byte[4096];
+                try {
+                    int n;
+                    while ((n = pis.read(chunk)) != -1) {
+                        synchronized (tailBuf) {
+                            tailBuf.write(chunk, 0, n);
+                            if (tailBuf.size() > MAX_HOOK_OUTPUT_BYTES * 2) {
+                                byte[] cur = tailBuf.toByteArray();
+                                tailBuf.reset();
+                                tailBuf.write(cur, cur.length - MAX_HOOK_OUTPUT_BYTES, MAX_HOOK_OUTPUT_BYTES);
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                } finally {
+                    try {
+                        pis.close();
+                    } catch (Exception ignored) {
+                    }
+                }
+            }, "OcPluginHookDrain");
+            drainer.setDaemon(true);
+            drainer.start();
+
+            boolean finished = p.waitFor(120, TimeUnit.SECONDS);
+            if (finished) {
                 hookExit = p.exitValue();
+                drainer.join(2000);
             } else {
                 p.destroyForcibly();
-                hookExit = -1;
+                try {
+                    pis.close();
+                } catch (Exception ignored) {
+                }
+                drainer.join(1500);
+                throw new IllegalStateException("Plugin post-install timed out after 120s");
+            }
+            if (hookExit != 0) {
+                String tail;
+                synchronized (tailBuf) {
+                    byte[] rawTail = tailBuf.toByteArray();
+                    int start = Math.max(0, rawTail.length - 512);
+                    tail = new String(rawTail, start, rawTail.length - start, StandardCharsets.UTF_8).trim();
+                }
+                throw new IllegalStateException("Plugin post-install failed (exit " + hookExit + ")"
+                        + (tail.isEmpty() ? "" : ": " + tail));
             }
             normalizeExtractedTree(targetDir, false, homePath);
         }

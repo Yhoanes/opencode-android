@@ -66,6 +66,7 @@ public final class AppLoader {
         }
 
         LocalAssetServer.setHostThemeHint(hostTheme);
+        bridge.setCoreOriginActive(true);
         String startUrl = "http://127.0.0.1:" + port + "/";
         try {
             SharedPreferences prefs = context.getSharedPreferences("oc_workspace_boot", Context.MODE_PRIVATE);

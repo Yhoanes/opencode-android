@@ -1,7 +1,7 @@
 # OpenCode Android Agent Rules & Environment Guidelines
 
 > [!NOTE]
-> This rule is automatically loaded into every session in OpenCode for Android (`v2.3.0-r2`).
+> This rule is automatically loaded into every session in OpenCode for Android (`v2.3.0-r3`).
 > It defines the native Android ARM64 operating environment, execution rules, package management, and elevated permissions.
 
 ---

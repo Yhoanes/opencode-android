@@ -176,7 +176,7 @@ public final class FileDownloader {
             DownloadManager dm = (DownloadManager) activity.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm != null) {
                 dm.enqueue(request);
-                Toast.makeText(activity, "Скачивание: " + fileName, Toast.LENGTH_SHORT).show();
+                Toast.makeText(activity, "Downloading: " + fileName, Toast.LENGTH_SHORT).show();
                 Log.i(TAG, "Download enqueued: " + fileName + " url=" + rawUrl);
             }
         } catch (Exception e) {
@@ -186,17 +186,20 @@ public final class FileDownloader {
     }
 
     private static void extractBlobViaJs(WebView webView, String blobUrl, String filename, String mimeType) {
+        String qUrl = org.json.JSONObject.quote(blobUrl != null ? blobUrl : "");
+        String qFile = org.json.JSONObject.quote(filename != null ? filename : "download");
+        String qMime = org.json.JSONObject.quote(mimeType != null ? mimeType : "");
         String js = "(function() {" +
                 "  try {" +
                 "    var xhr = new XMLHttpRequest();" +
-                "    xhr.open('GET', '" + blobUrl + "', true);" +
+                "    xhr.open('GET', " + qUrl + ", true);" +
                 "    xhr.responseType = 'blob';" +
                 "    xhr.onload = function() {" +
                 "      if (xhr.status === 200 || xhr.status === 0) {" +
                 "        var reader = new FileReader();" +
                 "        reader.onloadend = function() {" +
                 "          if (window.Android && window.Android.saveBlob) {" +
-                "            window.Android.saveBlob(reader.result, '" + filename + "', '" + (mimeType != null ? mimeType : "") + "');" +
+                "            window.Android.saveBlob(reader.result, " + qFile + ", " + qMime + ");" +
                 "          }" +
                 "        };" +
                 "        reader.readAsDataURL(xhr.response);" +

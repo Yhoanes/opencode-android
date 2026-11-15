@@ -21,7 +21,7 @@ public final class AppHtmlInjector {
     public static String inject(String html, AndroidBridge bridge, ThemeManager theme) {
         String boot;
         try {
-            JSONObject config = new JSONObject(bridge.getConfig());
+            JSONObject config = new JSONObject(bridge.getInternalConfig());
             JSONObject endpoints = new JSONObject();
             String base = bridge.getEngineBaseUrl();
             endpoints.put("core", base);
@@ -30,7 +30,7 @@ public final class AppHtmlInjector {
             boot = "<script>(function(){"
                     + "window.__APP_CONFIG__=" + config.toString() + ";"
                     + "window.__AG_ENDPOINTS__=" + endpoints.toString() + ";"
-                    + "window.__AG_CSRF__=" + JSONObject.quote(bridge.getCsrfToken()) + ";"
+                    + "window.__OC_BRIDGE_TOKEN__=" + JSONObject.quote(bridge.getBridgeAuthToken()) + ";"
                     + "window.__AG_HOST_THEME__="
                     + JSONObject.quote(theme != null && theme.mode() == com.oc.ide.theme.ThemeColors.MODE_DARK ? "dark"
                             : (theme != null && theme.mode() == com.oc.ide.theme.ThemeColors.MODE_LIGHT ? "light" : "system")) + ";"

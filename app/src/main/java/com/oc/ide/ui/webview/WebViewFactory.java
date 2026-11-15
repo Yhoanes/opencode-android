@@ -7,6 +7,7 @@ import android.view.View;
 import android.webkit.WebView;
 
 import com.oc.ide.bridge.AndroidBridge;
+import com.oc.ide.runtime.RuntimeConfig;
 import com.oc.ide.theme.ThemeManager;
 
 /** Creates and hardware-configures the host WebView. */
@@ -38,7 +39,7 @@ public final class WebViewFactory {
         WebSettingsFactory.configure(view);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            WebView.setWebContentsDebuggingEnabled(true);
+            WebView.setWebContentsDebuggingEnabled(RuntimeConfig.DEBUG);
         }
         return view;
     }

@@ -12,9 +12,11 @@ import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebView;
 
+import com.oc.ide.bridge.AndroidBridge;
 import com.oc.ide.ui.MainActivity;
+import com.oc.ide.util.LoopbackHost;
 
-/** Routes console output to logcat, popups to PopupWindowHandler, file chooser, and mic permissions. */
+/** Routes console output to logcat, popups to PopupWindowHandler, file chooser, and origin-checked mic permissions. */
 public final class AgyWebChromeClient extends WebChromeClient {
 
     private static final String TAG = "WebViewHost";
@@ -26,14 +28,21 @@ public final class AgyWebChromeClient extends WebChromeClient {
 
     private final PopupWindowHandler popupHandler;
     private final FileChooserCallback fileChooserCallback;
+    private final AndroidBridge bridge;
 
-    public AgyWebChromeClient(PopupWindowHandler popupHandler, FileChooserCallback fileChooserCallback) {
+    public AgyWebChromeClient(PopupWindowHandler popupHandler, FileChooserCallback fileChooserCallback,
+                              AndroidBridge bridge) {
         this.popupHandler = popupHandler;
         this.fileChooserCallback = fileChooserCallback;
+        this.bridge = bridge;
+    }
+
+    public AgyWebChromeClient(PopupWindowHandler popupHandler, FileChooserCallback fileChooserCallback) {
+        this(popupHandler, fileChooserCallback, null);
     }
 
     public AgyWebChromeClient(PopupWindowHandler popupHandler) {
-        this(popupHandler, null);
+        this(popupHandler, null, null);
     }
 
     @Override
@@ -60,26 +69,35 @@ public final class AgyWebChromeClient extends WebChromeClient {
         if (request == null) {
             return;
         }
-        MainActivity act = MainActivity.activeActivity;
-        if (act != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            boolean needsAudio = false;
-            String[] resources = request.getResources();
-            if (resources != null) {
-                for (String r : resources) {
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) {
-                        needsAudio = true;
-                        break;
-                    }
+        int enginePort = bridge != null ? bridge.getEnginePort() : -1;
+        if (!LoopbackHost.isCoreOrigin(request.getOrigin(), enginePort)) {
+            Log.w(TAG, "Denying WebView permission from non-core origin: " + request.getOrigin());
+            request.deny();
+            return;
+        }
+        boolean wantsAudio = false;
+        String[] resources = request.getResources();
+        if (resources != null) {
+            for (String r : resources) {
+                if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) {
+                    wantsAudio = true;
+                    break;
                 }
             }
-            if (needsAudio && act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
-                    != PackageManager.PERMISSION_GRANTED) {
-                act.requestWebViewAudioPermission(request);
-                return;
-            }
+        }
+        if (!wantsAudio) {
+            request.deny();
+            return;
+        }
+        MainActivity act = MainActivity.activeActivity;
+        if (act != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && act.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            act.requestWebViewAudioPermission(request);
+            return;
         }
         try {
-            request.grant(request.getResources());
+            request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
         } catch (Throwable t) {
             Log.w(TAG, "onPermissionRequest grant failed: " + t.getMessage());
         }

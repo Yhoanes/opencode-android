@@ -212,13 +212,17 @@ public class MainActivity extends Activity
     public void onPageFinished(String url) {
         Log.i(TAG, "onPageFinished " + url);
         WebView wv = getWebView();
-        if (wv != null && url != null && (url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:"))) {
+        int port = androidBridge != null ? androidBridge.getEnginePort() : -1;
+        if (wv != null && com.oc.ide.util.LoopbackHost.isCoreOriginUrl(url, port)) {
             try {
                 java.io.File bootFile = new java.io.File(runtimeManager.getWebDir(), "__oc_android_boot.js");
                 if (bootFile.isFile()) {
                     try (java.io.FileInputStream fis = new java.io.FileInputStream(bootFile)) {
                         String bootJs = com.oc.ide.util.IoUtil.readAll(fis, "UTF-8");
-                        wv.evaluateJavascript(bootJs, null);
+                        String tokenInit = "if(!window.__OC_ANDROID_BOOTED__){window.__OC_BRIDGE_TOKEN__="
+                                + org.json.JSONObject.quote(androidBridge.getBridgeAuthToken()) + ";\n"
+                                + bootJs + "\n}";
+                        wv.evaluateJavascript(tokenInit, null);
                     }
                 }
             } catch (Exception e) {
@@ -262,7 +266,31 @@ public class MainActivity extends Activity
         if (activeActivity == this) {
             activeActivity = null;
         }
+        if (pendingWebPermissionRequest != null) {
+            try {
+                pendingWebPermissionRequest.deny();
+            } catch (Throwable ignored) {
+            }
+            pendingWebPermissionRequest = null;
+        }
+        if (filePathCallback != null) {
+            try {
+                filePathCallback.onReceiveValue(null);
+            } catch (Throwable ignored) {
+            }
+            filePathCallback = null;
+        }
+        WebView wv = getWebView();
+        com.oc.ide.update.AppUpdateManager.getInstance(this).detachWebView(wv);
+        if (androidBridge != null) {
+            androidBridge.setCoreOriginActive(false);
+            androidBridge.setActivity(null);
+        }
         AppLifecycle.destroy(handler);
+        if (webViewHost != null) {
+            webViewHost.destroy();
+            webViewHost = null;
+        }
         super.onDestroy();
     }
 
@@ -650,11 +678,17 @@ public class MainActivity extends Activity
     }
 
     public void requestWebViewAudioPermission(android.webkit.PermissionRequest request) {
+        if (this.pendingWebPermissionRequest != null && this.pendingWebPermissionRequest != request) {
+            try {
+                this.pendingWebPermissionRequest.deny();
+            } catch (Throwable ignored) {
+            }
+        }
         this.pendingWebPermissionRequest = request;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, REQUEST_AUDIO_PERMISSION);
         } else if (request != null) {
-            request.grant(request.getResources());
+            request.grant(new String[]{android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE});
             this.pendingWebPermissionRequest = null;
         }
     }
@@ -704,7 +738,7 @@ public class MainActivity extends Activity
             if (req != null) {
                 try {
                     if (granted) {
-                        req.grant(req.getResources());
+                        req.grant(new String[]{android.webkit.PermissionRequest.RESOURCE_AUDIO_CAPTURE});
                     } else {
                         req.deny();
                     }

@@ -38,6 +38,10 @@ public final class CoreEnvironment {
         env.put("XDG_STATE_HOME", new File(filesDir, ".local/state").getAbsolutePath());
         env.put("XDG_CACHE_HOME", new File(filesDir, ".cache").getAbsolutePath());
         env.put("OPENCODE_CONFIG_DIR", ocConfig.getAbsolutePath());
+        File ptyBin = new File(bin, "opencode-pty");
+        if (ptyBin.isFile()) {
+            env.put("OPENCODE_PTY_BIN", ptyBin.getAbsolutePath());
+        }
         env.put("OPENCODE_SERVER_USERNAME", "opencode");
         env.put("OPENCODE_SERVER_PASSWORD", runtime.getCsrfToken());
         env.put("OPENCODE_FILEWATCHER_DISABLE", "1");

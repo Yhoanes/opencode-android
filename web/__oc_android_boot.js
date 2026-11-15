@@ -3,6 +3,13 @@
   if (window.__OC_ANDROID_BOOTED__) return;
   window.__OC_ANDROID_BOOTED__ = true;
 
+  var bridgeToken = typeof window.__OC_BRIDGE_TOKEN__ === "string" ? window.__OC_BRIDGE_TOKEN__ : "";
+  try {
+    delete window.__OC_BRIDGE_TOKEN__;
+  } catch (e) {
+    window.__OC_BRIDGE_TOKEN__ = undefined;
+  }
+
   var host = window.Android || window.AndroidBridge || null;
   if (host && !window.AndroidBridge) {
     window.AndroidBridge = host;
@@ -57,12 +64,12 @@
   // 1. One-time initial default workspace seed (/storage/emulated/0/Documents/OpenCode)
   //    Persisted in localStorage so explicit navigation to $HOME later is respected (OC-05).
   function ensureDefaultWorkspaceRoute() {
-    if (!host || typeof host.getConfig !== "function") return false;
+    if (!host || typeof host.getConfigAuth !== "function" || !bridgeToken) return false;
     try {
       if (localStorage.getItem("__oc_default_ws_seeded_v2") === "1") {
         return false;
       }
-      var cfg = JSON.parse(host.getConfig() || "{}");
+      var cfg = JSON.parse(host.getConfigAuth(bridgeToken) || "{}");
       var filesDir = cfg.home || "/data/user/0/com.oc.ide/files";
       var workspaceDir = cfg.workspaceDir || "/storage/emulated/0/Documents/OpenCode";
       if (!workspaceDir || workspaceDir === filesDir) return false;
@@ -227,6 +234,8 @@
   var latestUpdateState = { type: "idle" };
   var dirPickerCallbacks = {};
   var dirPickerSeq = 0;
+  var pluginCallbacks = {};
+  var pluginOpSeq = 0;
 
   function handleNativeUpdaterState(st) {
     if (!st) return;
@@ -250,10 +259,24 @@
     }
   };
 
+  window.__ocOnPluginOpDone = function (cbId, rawJson) {
+    var fn = cbId && pluginCallbacks[cbId];
+    if (cbId) delete pluginCallbacks[cbId];
+    if (typeof fn === "function") {
+      var parsed = {};
+      try {
+        parsed = typeof rawJson === "string" ? JSON.parse(rawJson || "{}") : (rawJson || {});
+      } catch (e) {
+        parsed = { ok: false, error: String(rawJson || e.message) };
+      }
+      fn(parsed);
+    }
+  };
+
   function parseInstalledMap() {
-    if (!host || typeof host.listAndroidPlugins !== "function") return {};
+    if (!host || typeof host.listAndroidPluginsAuth !== "function" || !bridgeToken) return {};
     try {
-      return JSON.parse(host.listAndroidPlugins() || "{}") || {};
+      return JSON.parse(host.listAndroidPluginsAuth(bridgeToken) || "{}") || {};
     } catch (e) {
       return {};
     }
@@ -294,6 +317,14 @@
       });
   }
 
+  function isAllowedPluginArchiveUrl(url) {
+    if (typeof url !== "string") return false;
+    return (
+      url.indexOf("https://raw.githubusercontent.com/Yhoanes/") === 0 ||
+      url.indexOf("https://github.com/Yhoanes/") === 0
+    );
+  }
+
   var remoteRefreshed = false;
   function refreshRemoteCatalogInBackground(list) {
     if (remoteRefreshed) return;
@@ -308,7 +339,7 @@
           if (!c || !c.id) return;
           var slug = String(c.id).split("/").pop();
           var url = c.source && c.source.archive && c.source.archive.url;
-          if (!slug || !url) return;
+          if (!slug || !isAllowedPluginArchiveUrl(url)) return;
           if (!byName[slug]) {
             var item = {
               name: slug,
@@ -425,74 +456,95 @@
   }
 
   function handleInstallPlugin(p) {
-    if (!host || busyPlugins[p.name]) return;
+    if (!host || !bridgeToken || typeof host.installMarketplacePluginAsync !== "function" || busyPlugins[p.name]) {
+      return;
+    }
     busyPlugins[p.name] = "installing";
     delete pluginErrors[p.name];
     renderPluginsCatalogIfMounted(true);
 
-    setTimeout(function () {
-      try {
-        var raw = host.installMarketplacePlugin(
-          p.name,
-          p.archiveUrl || "",
-          "antigravity-plugins-official/plugin/" + p.name,
-          "antigravity-plugins-official",
-          p.version || "1.0.0"
-        );
-        var res = JSON.parse(raw || "{}");
-        delete busyPlugins[p.name];
-        if (!res.ok) {
-          pluginErrors[p.name] = res.error || tr("Error al instalar el plugin", "Plugin installation failed");
-        } else {
-          triggerOpenCodeHotReload();
-        }
-      } catch (e) {
-        delete busyPlugins[p.name];
-        pluginErrors[p.name] = e.message || String(e);
+    var cbId = "pl_inst_" + (++pluginOpSeq) + "_" + Date.now();
+    pluginCallbacks[cbId] = function (res) {
+      delete busyPlugins[p.name];
+      if (!res || !res.ok) {
+        pluginErrors[p.name] = (res && res.error) || tr("Error al instalar el plugin", "Plugin installation failed");
+      } else {
+        triggerOpenCodeHotReload();
       }
       renderPluginsCatalogIfMounted(true);
-    }, 40);
+    };
+    try {
+      host.installMarketplacePluginAsync(
+        bridgeToken,
+        cbId,
+        p.name,
+        p.archiveUrl || "",
+        "antigravity-plugins-official/plugin/" + p.name,
+        "antigravity-plugins-official",
+        p.version || "1.0.0"
+      );
+    } catch (e) {
+      delete pluginCallbacks[cbId];
+      delete busyPlugins[p.name];
+      pluginErrors[p.name] = e.message || String(e);
+      renderPluginsCatalogIfMounted(true);
+    }
   }
 
   function handleTogglePlugin(p, nextEnabled) {
-    if (!host || busyPlugins[p.name]) return;
+    if (!host || !bridgeToken || typeof host.toggleAndroidPluginAsync !== "function" || busyPlugins[p.name]) {
+      return;
+    }
     busyPlugins[p.name] = "toggling";
     delete pluginErrors[p.name];
     renderPluginsCatalogIfMounted(true);
 
-    setTimeout(function () {
-      try {
-        var raw = host.toggleAndroidPlugin(p.name, nextEnabled);
-        var res = JSON.parse(raw || "{}");
-        if (res && res.ok === false && res.error) {
-          pluginErrors[p.name] = res.error;
-        } else {
-          triggerOpenCodeHotReload();
-        }
-      } catch (e) {
-        pluginErrors[p.name] = e.message || String(e);
-      }
+    var cbId = "pl_tog_" + (++pluginOpSeq) + "_" + Date.now();
+    pluginCallbacks[cbId] = function (res) {
       delete busyPlugins[p.name];
+      if (res && res.ok === false && res.error) {
+        pluginErrors[p.name] = res.error;
+      } else {
+        triggerOpenCodeHotReload();
+      }
       renderPluginsCatalogIfMounted(true);
-    }, 30);
+    };
+    try {
+      host.toggleAndroidPluginAsync(bridgeToken, cbId, p.name, nextEnabled);
+    } catch (e) {
+      delete pluginCallbacks[cbId];
+      delete busyPlugins[p.name];
+      pluginErrors[p.name] = e.message || String(e);
+      renderPluginsCatalogIfMounted(true);
+    }
   }
 
   function handleUninstallPlugin(p) {
-    if (!host || busyPlugins[p.name]) return;
+    if (!host || !bridgeToken || typeof host.uninstallMarketplacePluginAsync !== "function" || busyPlugins[p.name]) {
+      return;
+    }
     busyPlugins[p.name] = "removing";
     delete pluginErrors[p.name];
     renderPluginsCatalogIfMounted(true);
 
-    setTimeout(function () {
-      try {
-        host.uninstallMarketplacePlugin(p.name);
-        triggerOpenCodeHotReload();
-      } catch (e) {
-        pluginErrors[p.name] = e.message || String(e);
-      }
+    var cbId = "pl_rm_" + (++pluginOpSeq) + "_" + Date.now();
+    pluginCallbacks[cbId] = function (res) {
       delete busyPlugins[p.name];
+      if (res && res.ok === false && res.error) {
+        pluginErrors[p.name] = res.error;
+      } else {
+        triggerOpenCodeHotReload();
+      }
       renderPluginsCatalogIfMounted(true);
-    }, 30);
+    };
+    try {
+      host.uninstallMarketplacePluginAsync(bridgeToken, cbId, p.name);
+    } catch (e) {
+      delete pluginCallbacks[cbId];
+      delete busyPlugins[p.name];
+      pluginErrors[p.name] = e.message || String(e);
+      renderPluginsCatalogIfMounted(true);
+    }
   }
 
   function findPluginsSectionElement() {
@@ -684,31 +736,36 @@
     var t = st.type || "idle";
     var ver = (st.update && st.update.version) || st.version || "";
     var installedVer = st.installedVersion || (host && host.getAppVersion ? host.getAppVersion() : "");
+    var nextLabel;
 
     if (t === "checking" || t === "checking for updates") {
-      btn.textContent = tr("Buscando actualizaciones…", "Checking for updates…");
+      nextLabel = tr("Buscando actualizaciones…", "Checking for updates…");
     } else if (t === "available for download" || t === "downloading") {
       var pct = typeof st.progress === "number" && st.progress >= 0
         ? " (" + Math.round(st.progress) + "%)"
         : "";
-      btn.textContent = tr(
+      nextLabel = tr(
         "Descargando actualización" + (ver ? " v" + ver : "") + pct + "…",
         "Downloading update" + (ver ? " v" + ver : "") + pct + "…"
       );
     } else if (t === "ready") {
-      btn.textContent = tr(
+      nextLabel = tr(
         "Instalar actualización disponible" + (ver ? " (v" + ver + ")" : ""),
         "Install available update" + (ver ? " (v" + ver + ")" : "")
       );
     } else if (st.result === "up-to-date") {
-      btn.textContent = tr(
+      nextLabel = tr(
         "OpenCode está actualizado" + (installedVer ? " (v" + installedVer + ")" : "") + " · Buscar de nuevo",
         "OpenCode is up to date" + (installedVer ? " (v" + installedVer + ")" : "") + " · Check again"
       );
     } else if (st.result === "error") {
-      btn.textContent = tr("Reintentar búsqueda de actualizaciones", "Retry update check");
+      nextLabel = tr("Reintentar búsqueda de actualizaciones", "Retry update check");
     } else {
-      btn.textContent = tr("Buscar actualizaciones", "Check for updates");
+      nextLabel = tr("Buscar actualizaciones", "Check for updates");
+    }
+
+    if (btn.textContent !== nextLabel) {
+      btn.textContent = nextLabel;
     }
   }
 
@@ -733,7 +790,9 @@
     btn.className = "settings-about-link";
     btn.addEventListener("click", function () {
       if (latestUpdateState && latestUpdateState.type === "ready") {
-        if (typeof host.applyAppUpdate === "function") host.applyAppUpdate();
+        if (typeof host.applyAppUpdateAuth === "function" && bridgeToken) {
+          host.applyAppUpdateAuth(bridgeToken);
+        }
       } else {
         latestUpdateState = { type: "checking for updates" };
         updateAboutLinkLabel();
@@ -785,34 +844,26 @@
   }
 
   function confirmPickedDirectoryInDialog(chosenPath) {
-    if (!chosenPath) return;
-    var picker = document.querySelector(".directory-picker");
-    if (picker && navigateDirectoryPickerTo(picker, chosenPath)) {
-      var tries = 0;
-      var poll = setInterval(function () {
-        tries++;
-        var activePicker = document.querySelector(".directory-picker");
-        if (!activePicker) {
-          clearInterval(poll);
-          return;
+    if (!chosenPath || chosenPath.charAt(0) !== "/") return;
+    // Close any open DirectoryPickerDialog cleanly so we never race against a stale selection state
+    try {
+      var picker = document.querySelector(".directory-picker");
+      if (picker) {
+        var closeBtn = picker.querySelector('[data-slot="dialog-close-button"]');
+        if (closeBtn) {
+          closeBtn.click();
+        } else {
+          picker.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
         }
-        var selTextEl = activePicker.querySelector(".directory-picker-selection-text");
-        var submitBtn = activePicker.querySelector('button[data-variant="contrast"]');
-        var selText = selTextEl ? (selTextEl.textContent || "") : "";
-        var leaf = chosenPath.split("/").filter(Boolean).pop() || "";
-        if (submitBtn && !submitBtn.disabled && (!leaf || selText.indexOf(leaf) !== -1 || tries >= 8)) {
-          clearInterval(poll);
-          submitBtn.click();
-          return;
-        }
-        if (tries >= 24) {
-          clearInterval(poll);
-          window.location.assign("/" + encodeBase64Url(chosenPath) + "/session");
-        }
-      }, 60);
-    } else {
-      window.location.assign("/" + encodeBase64Url(chosenPath) + "/session");
-    }
+      }
+    } catch (e) {}
+
+    var destUrl = "/" + encodeBase64Url(chosenPath) + "/session";
+    fetch("/api/project?directory=" + encodeURIComponent(chosenPath), { credentials: "include" })
+      .catch(function () {})
+      .then(function () {
+        window.location.assign(destUrl);
+      });
   }
 
   function mountDirectoryPickerAndroidActions() {
@@ -851,14 +902,14 @@
       false,
       function (ev) {
         ev.preventDefault();
-        if (typeof host.pickProjectDirectory !== "function") return;
+        if (typeof host.pickProjectDirectoryAuth !== "function" || !bridgeToken) return;
         var cbId = "dir_" + (++dirPickerSeq) + "_" + Date.now();
         dirPickerCallbacks[cbId] = function (chosenPath) {
           if (chosenPath) {
             confirmPickedDirectoryInDialog(chosenPath);
           }
         };
-        host.pickProjectDirectory(cbId);
+        host.pickProjectDirectoryAuth(bridgeToken, cbId);
       }
     );
     safBtn.setAttribute("data-oc-android-dir-btn", "2");
@@ -901,20 +952,30 @@
     });
   }
 
+  function isInsideInjectedAndroidNode(node) {
+    if (!node) return false;
+    var el = node.nodeType === 1 ? node : node.parentElement;
+    if (!el || typeof el.closest !== "function") return false;
+    return !!el.closest('[data-oc-about-update], [data-oc-native-plugins], [data-oc-android-dir-btn]');
+  }
+
   function hasActionableSurfaceInMutations(mutations) {
-    if (
-      document.querySelector(".settings-extensions-tabs") ||
-      document.querySelector(".settings-about-details") ||
-      document.querySelector(".directory-picker")
-    ) {
-      return true;
-    }
     for (var i = 0; i < mutations.length; i++) {
       var m = mutations[i];
+      if (!m || isInsideInjectedAndroidNode(m.target)) {
+        continue;
+      }
+      if (m.type === "attributes") {
+        var tEl = m.target && m.target.nodeType === 1 ? m.target : null;
+        if (tEl && typeof tEl.closest === "function" && tEl.closest(".settings-extensions-tabs")) {
+          return true;
+        }
+        continue;
+      }
       if (m.type === "childList" && m.addedNodes && m.addedNodes.length > 0) {
         for (var j = 0; j < m.addedNodes.length; j++) {
           var node = m.addedNodes[j];
-          if (node && node.nodeType === 1) {
+          if (node && node.nodeType === 1 && !isInsideInjectedAndroidNode(node)) {
             var cls = typeof node.className === "string" ? node.className : "";
             if (
               cls.indexOf("settings") !== -1 ||

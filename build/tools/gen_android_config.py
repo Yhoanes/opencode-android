@@ -49,6 +49,7 @@ def main(argv):
     oauth_scheme = env.get("OAUTH_SCHEME", "opencode")
     app_name = env.get("APP_NAME", "OpenCode")
     min_api = env.get("MIN_API", "28")
+    is_debug = os.environ.get("DEV_MODE", "0") == "1"
 
     pkg_dir = os.path.join(outdir, *pkg.split("."))
     res_values_dir = os.path.join(outdir, "res", "values")
@@ -60,6 +61,7 @@ def main(argv):
         f.write("package %s;\n\n" % pkg)
         f.write("public final class BuildConfig {\n")
         f.write("    private BuildConfig() {}\n\n")
+        f.write("    public static final boolean DEBUG=%s;\n" % ("true" if is_debug else "false"))
         f.write("    public static final int PORT=%s;\n" % port)
         f.write("    public static final int PORT_DEV=%s;\n" % port_dev)
         f.write("    public static final String CORE_VERSION=%s;\n" % java_string(core_version))

@@ -36,7 +36,7 @@ public final class WebViewHost {
         this.bridge = bridge;
         this.webView = WebViewFactory.create(context, bridge, theme);
         this.webView.setWebChromeClient(new AgyWebChromeClient(
-                new PopupWindowHandler(context, oauth), fileChooserCallback));
+                new PopupWindowHandler(context, oauth), fileChooserCallback, bridge));
         this.webView.setWebViewClient(new AgyWebViewClient(
                 context, oauth, new LocalAssetServer(), bridge, new Listener() {
             @Override
@@ -103,5 +103,33 @@ public final class WebViewHost {
     /** Loads our asset UI with the app config injected ahead of every app script. */
     public void loadApp() {
         AppLoader.load(context, webView, theme, bridge);
+    }
+
+    /** Detaches JS interfaces, callbacks, parent view, and destroys the underlying WebView cleanly. */
+    public void destroy() {
+        this.listener = null;
+        try {
+            webView.stopLoading();
+        } catch (Throwable ignored) {
+        }
+        try {
+            webView.setDownloadListener(null);
+            webView.setWebChromeClient(null);
+        } catch (Throwable ignored) {
+        }
+        try {
+            webView.removeJavascriptInterface("Android");
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (webView.getParent() instanceof android.view.ViewGroup) {
+                ((android.view.ViewGroup) webView.getParent()).removeView(webView);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            webView.destroy();
+        } catch (Throwable ignored) {
+        }
     }
 }
