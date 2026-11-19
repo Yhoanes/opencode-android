@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="window_background">#080808</color>
+    <color name="ic_launcher_background">#fafafa</color>
+    <color name="ic_launcher_background_dark">#080808</color>
+    <color name="ic_launcher_background_light">#fafafa</color>
+    <color name="splash_bg_dark">#080808</color>
+    <color name="splash_bg_light">#fafafa</color>
+</resources>
