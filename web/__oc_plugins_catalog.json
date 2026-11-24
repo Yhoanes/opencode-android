@@ -1,0 +1,84 @@
+{
+  "plugins": [
+    {
+      "name": "craft-anything",
+      "displayName": "Craft Anything + Ghidra",
+      "version": "0.5.0",
+      "description": "335 native ARM64 Rust MCP tools for static & dynamic reverse engineering (ELF, PE, Mach-O, APK/DEX, .NET/NativeAOT, WASM, ESP32/UF2, Godot .pck, Unity IL2CPP), clean-room rebuilds, RL HAR mocks & Ghidra 12.1.4.",
+      "descriptionEs": "335 herramientas MCP nativas en Rust ARM64 para ingenieria inversa de binarios y firmware (ELF, PE, Mach-O, APK/DEX, .NET/NativeAOT, WASM, ESP32/UF2, Godot .pck, Unity IL2CPP), reconstruccion clean-room, mocks RL HAR y Ghidra 12.1.4.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/craft-anything/craft-anything.zip"
+    },
+    {
+      "name": "agy-video-gen",
+      "displayName": "AGY Video Gen",
+      "version": "1.0.0",
+      "description": "Native ARM64 Rust AI real video generator (Text-to-Video, Image-to-Video character consistency, First-Last Frame, scene extension, audio lip-sync & Camera LoRAs) across 5 ZeroGPU clusters + 1080p CAS GPU super-resolution.",
+      "descriptionEs": "Motor nativo en Rust ARM64 de generacion de video real con IA (Text-to-Video, Image-to-Video consistente, First-Last Frame, extension de escenas y Lip-Sync) sin API keys de pago en 5 clusters ZeroGPU + Super-Resolucion GPU 1080p.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/agy-video-gen/agy-video-gen.zip"
+    },
+    {
+      "name": "agy-video-studio",
+      "displayName": "AGY Video Studio",
+      "version": "4.0.0",
+      "description": "Native ARM64 Rust pro video editor & 60 FPS motion studio: Screen-Studio polish, multi-track V2 B-Roll/PiP/Split-Screen, Karaoke captions, -14 LUFS sidechain audio, h264_mediacodec GPU encode & CapCut/VN export.",
+      "descriptionEs": "Editor profesional nativo en Rust ARM64 y estudio Motion 60 FPS: Screen-Studio Polish, multipista V2 (B-Roll, PiP, Split-Screen), subtitulos Karaoke, audio -14 LUFS, codificacion GPU h264_mediacodec y exportacion a CapCut/VN.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/agy-video-studio/agy-video-studio.zip"
+    },
+    {
+      "name": "game-studio",
+      "displayName": "Game Studio 2D/3D",
+      "version": "2.0.0",
+      "description": "16 native ARM64 Rust MCP tools + C++/Rust GDExtension + offline local APK builder for Godot 4 Vulkan (120-144 FPS), MultiMesh shaders, Sprite Atlas, 3D GLB LOD optimizer, 0-ms WAV DSP & rish live profiler.",
+      "descriptionEs": "16 herramientas MCP nativas en Rust ARM64 + GDExtension (C++/Rust) + compilador local de APK sin nube para Godot 4 Vulkan (120-144 FPS), shaders MultiMesh, Sprite Atlas, optimizador 3D GLB, audio 0-ms y profiler rish.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/game-studio/game-studio.zip"
+    },
+    {
+      "name": "unity-android",
+      "displayName": "Unity Studio Android",
+      "version": "1.0.0",
+      "description": "13 native ARM64 Rust MCP tools + ported official Unity CLI v1.0.0: scaffold Unity 6.3 LTS URP 2D/3D 120 FPS mobile games, YAML/GUID audit, $0 GameCI builds, APK deploy & rish live debugging.",
+      "descriptionEs": "13 herramientas MCP nativas en Rust ARM64 + Unity CLI v1.0.0 oficial porteado: crea juegos Unity 6.3 LTS URP 2D/3D a 120 FPS, auditoria YAML/GUID, compilacion gratis con GameCI, despliegue APK y depuracion en vivo con rish.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/unity-android/unity-android.zip"
+    },
+    {
+      "name": "github",
+      "displayName": "GitHub",
+      "version": "2.1.1",
+      "description": "91 native ARM64 GitHub MCP tools (repos, PRs, code review, issues, Actions CI/CD logs, code search & security) + Bionic Git/GH OAuth bridge — 100% local on Android without Docker.",
+      "descriptionEs": "91 herramientas MCP nativas ARM64 de GitHub (repositorios, PRs, revision de codigo, issues, logs de Actions CI/CD, busqueda y seguridad) + puente OAuth para Git/GH en Android sin Docker.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/github/github.zip"
+    },
+    {
+      "name": "agy-adb-bridge",
+      "displayName": "AGY ADB Bridge",
+      "version": "1.0.1",
+      "description": "Persistent uid=2000(shell) native Rust bridge: 6-digit wireless ADB pairing with offline 127.0.0.1:5555 mode, 0%-battery mDNS discovery, and anti-hang rish wrapper for MIUI/HyperOS.",
+      "descriptionEs": "Puente nativo en Rust ARM64 con permisos uid=2000(shell) persistentes: vinculacion ADB inalambrica de 6 digitos con modo local 127.0.0.1:5555 sin Wi-Fi, mDNS 0% bateria y wrapper rish anti-bloqueo.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/agy-adb-bridge/agy-adb-bridge.zip"
+    },
+    {
+      "name": "chrome-devtools-plugin",
+      "displayName": "Chrome DevTools MCP",
+      "version": "1.10.4",
+      "description": "Native Android ARM64 headless Chromium automation, DOM/network inspection, screenshots, and Core Web Vitals debugging via Chrome DevTools Protocol.",
+      "descriptionEs": "Automatizacion nativa de Chromium headless en Android ARM64, inspeccion de DOM y red, capturas de pantalla y depuracion Web Vitals mediante Chrome DevTools Protocol.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/chrome-devtools-plugin/chrome-devtools-plugin.zip"
+    },
+    {
+      "name": "android-cli-plugin",
+      "displayName": "Android CLI & SDK Skills",
+      "version": "1.0.16",
+      "description": "On-device Android CLI bridge, Shizuku rish helpers, and official Android architecture skills adapted for ARM64.",
+      "descriptionEs": "Puente Android CLI en el dispositivo, utilidades Shizuku rish y habilidades oficiales de arquitectura Android adaptadas a ARM64.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/android-cli-plugin/android-cli-plugin.zip"
+    },
+    {
+      "name": "science",
+      "displayName": "Science & Research Skills",
+      "version": "1.3.2",
+      "description": "Curated collection of structured agent skills for scientific computing, data analysis, and research workflows.",
+      "descriptionEs": "Coleccion estructurada de habilidades para computacion cientifica, analisis de datos y flujos de investigacion.",
+      "archiveUrl": "https://raw.githubusercontent.com/Yhoanes/antigravity-android-plugins/main/plugins/science/science.zip"
+    }
+  ]
+}

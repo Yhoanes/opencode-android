@@ -1,0 +1,5 @@
+Welcome to OpenCode for Android (Native ARM64 Bionic Environment)
+ * Package Manager:  pkg update && pkg install <pkg>
+ * Fix Shebangs:     oc-fix-paths
+ * Elevated Shell:   rish -c "<cmd>"
+ * Reload MCP/Rules: opencode reload
