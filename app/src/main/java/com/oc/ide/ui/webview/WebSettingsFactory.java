@@ -1,0 +1,74 @@
+package com.oc.ide.ui.webview;
+
+import android.os.Build;
+import android.util.Log;
+import android.webkit.CookieManager;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+
+import com.oc.ide.runtime.RuntimeConfig;
+
+/** Applies the WebView settings profile for OpenCode v2 (mobile-first by default, optional desktop viewport). */
+public final class WebSettingsFactory {
+
+    private static final String TAG = "WebViewHost";
+
+    public static final String DESKTOP_UA =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                    + "Chrome/131.0.0.0 Safari/537.36 OpenCode/" + RuntimeConfig.CORE_VERSION;
+
+    private WebSettingsFactory() {
+    }
+
+    private static String defaultUserAgent = null;
+
+    public static void configure(WebView view) {
+        WebSettings settings = view.getSettings();
+        if (defaultUserAgent == null) {
+            defaultUserAgent = settings.getUserAgentString();
+        }
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setSupportZoom(true);
+        settings.setBuiltInZoomControls(true);
+        settings.setDisplayZoomControls(false);
+        settings.setSupportMultipleWindows(true);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setMediaPlaybackRequiresUserGesture(false);
+
+        boolean desktop = DesktopModePrefs.isDesktopMode(view.getContext());
+        applyDesktopMode(view, desktop);
+
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(true);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        CookieManager.getInstance().setAcceptCookie(true);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            CookieManager.getInstance().setAcceptThirdPartyCookies(view, true);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.setSafeBrowsingEnabled(false);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                settings.setOffscreenPreRaster(true);
+            } catch (Exception e) {
+                Log.w(TAG, "setOffscreenPreRaster failed", e);
+            }
+        }
+    }
+
+    public static void applyDesktopMode(WebView view, boolean desktop) {
+        WebSettings settings = view.getSettings();
+        if (defaultUserAgent == null) {
+            defaultUserAgent = settings.getUserAgentString();
+        }
+        settings.setUserAgentString(desktop ? DESKTOP_UA : defaultUserAgent);
+        settings.setUseWideViewPort(desktop);
+        settings.setLoadWithOverviewMode(desktop);
+    }
+}

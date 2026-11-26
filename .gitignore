@@ -1,0 +1,51 @@
+# Build staging & compiled artifacts
+build/*
+!build/lib/
+!build/phases/
+!build/tools/
+dist/*
+!dist/.gitkeep
+app/gen/
+web/generated/
+
+# Track compressed core archive (<100 MB); ignore uncompressed raw binary
+core/opencode
+!core/opencode.tar.gz
+
+# Python & Rust build caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+env/rust/agy-box/target/
+env/rust/opencode-pty/target/
+target/
+
+# Logs, temporary & signature files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+*.idsig
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Sensitive credentials & keystores (NEVER commit signing keys)
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pk8
+*.pem
+!env/overlay/etc/tls/cert.pem
+signing.env
+keystore.env
+*.key
+*-token
+.env.local
+
+# Scratch / local workspaces
+scratch/
